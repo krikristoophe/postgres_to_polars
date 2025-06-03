@@ -1,0 +1,19 @@
+[package]
+name = "postgres_to_polars"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "postgres_to_polars"
+path = "bin/test.rs"
+
+[dependencies]
+anyhow = "1.0.98"
+byteorder = "1.5.0"
+bytes = "1.10.1"
+fallible-iterator = "0.2.0"
+md5 = "0.7.0"
+polars = "0.46"
+postgres-protocol = "0.6.8"
+slice = "0.0.4"
+uuid = { version = "1.17.0", features = ["v4"] }
