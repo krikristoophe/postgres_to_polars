@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use super::client_options::ClientOptions;
 use super::params::BinaryParam;
 use crate::models::column_result::{
-    ColumnStorage, column_from_field, column_to_series, push_column_value,
+    ColumnStorage, clone_storages, column_from_field, column_to_series, push_column_value,
 };
 use crate::models::params::format_params;
 use crate::utils::{md5_hash, print_error, statement_name};
@@ -12,28 +14,34 @@ use postgres_protocol::IsNull;
 use postgres_protocol::message::backend;
 use postgres_protocol::message::backend::DataRowRanges;
 use postgres_protocol::message::frontend;
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+
+#[derive(Debug, Clone)]
+struct PreparedStatementInfo {
+    param_types: Vec<u32>, // c’est ce que tu passes à `parse`
+    columns: Vec<ColumnStorage>,
+}
 
 pub struct Client {
     options: ClientOptions,
-    stream: TcpStream,
-    portal_name: String,
+    stream: Arc<Mutex<TcpStream>>,
+    prepared_statements: Mutex<HashMap<String, PreparedStatementInfo>>,
 }
 
 impl Client {
-    pub fn new(options: ClientOptions) -> Self {
-        let portal_name = format!("portal_{}", uuid::Uuid::new_v4());
-        let stream = TcpStream::connect(options.connect_url()).unwrap();
+    pub async fn new(options: ClientOptions) -> Self {
+        let stream = TcpStream::connect(options.connect_url()).await.unwrap();
         Client {
             options,
-            stream,
-            portal_name,
+            stream: Arc::new(Mutex::new(stream)),
+            prepared_statements: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn connect(&self) -> anyhow::Result<()> {
-        let mut stream = &self.stream;
+    pub async fn connect(&self) -> anyhow::Result<()> {
+        let mut stream = self.stream.lock().await;
         // Handshake initial
         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
         frontend::startup_message(
@@ -43,7 +51,7 @@ impl Client {
             ],
             &mut buf,
         )?;
-        stream.write_all(&buf)?;
+        stream.write_all(&buf).await?;
 
         // Lecture des messages d'accueil jusqu'à ReadyForQuery
 
@@ -56,7 +64,7 @@ impl Client {
                 let dst = read_buffer.chunk_mut();
                 let buf: &mut [u8] =
                     unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
-                let n = stream.read(buf)?;
+                let n = stream.read(buf).await?;
                 unsafe {
                     read_buffer.advance_mut(n);
                 }
@@ -92,7 +100,7 @@ impl Client {
                             .as_bytes(),
                             &mut buf,
                         )?;
-                        stream.write_all(&buf)?;
+                        stream.write_all(&buf).await?;
                     }
                     _ => {}
                 }
@@ -105,29 +113,49 @@ impl Client {
         Ok(())
     }
 
-    pub fn query<P>(&self, query: &str, params: P) -> anyhow::Result<DataFrame>
+    pub async fn query<P>(&self, query: &str, params: P) -> anyhow::Result<DataFrame>
     where
         P: IntoIterator<Item = Option<BinaryParam>>,
     {
-        let mut stream = &self.stream;
+        let portal_name = format!("portal_{}", uuid::Uuid::new_v4());
+        let mut stream = self.stream.lock().await;
         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
 
         let (param_types, param_values) = format_params(params);
 
         let name = statement_name(query);
+        let mut prepared_statements = self.prepared_statements.lock().await;
 
-        frontend::parse(&name, query, param_types.iter().copied(), &mut buf)?;
-        stream.write_all(&buf)?;
+        let cached_statement = prepared_statements.get(&name);
 
-        buf.clear();
-        frontend::describe(b'S', &name, &mut buf)?;
+        let prepare = match cached_statement {
+            Some(info) => {
+                if info.param_types != param_types {
+                    panic!("Same statement name but different param types!");
+                }
+                false
+            }
+            None => true,
+        };
 
-        stream.write_all(&buf)?;
+        let mut columns = match cached_statement {
+            Some(info) => info.columns.clone(),
+            None => Vec::new(),
+        };
+
+        if prepare {
+            frontend::parse(&name, query, param_types.iter().copied(), &mut buf)?;
+            stream.write_all(&buf).await?;
+
+            buf.clear();
+            frontend::describe(b'S', &name, &mut buf)?;
+            stream.write_all(&buf).await?;
+        }
 
         // Étape 2 : Bind avec result_format = binaire
         buf.clear();
         frontend::bind(
-            &self.portal_name,
+            &portal_name,
             &name,
             std::iter::repeat(1).take(param_values.len()), // format binaire
             param_values.iter(),
@@ -142,31 +170,33 @@ impl Client {
             &mut buf,
         )
         .map_err(|_| anyhow::anyhow!("bind error"))?;
-        stream.write_all(&buf)?;
+        stream.write_all(&buf).await?;
 
         // Étape 3 : Execute
         buf.clear();
-        frontend::execute(&self.portal_name, 0, &mut buf)?;
-        stream.write_all(&buf)?;
+        frontend::execute(&portal_name, 0, &mut buf)?;
+        stream.write_all(&buf).await?;
+
+        frontend::close(b'P', &portal_name, &mut buf)?;
+        stream.write_all(&buf).await?;
 
         // Étape 4 : Sync
         buf.clear();
         frontend::sync(&mut buf);
-        stream.write_all(&buf)?;
+        stream.write_all(&buf).await?;
 
         // Lire les messages de réponse
         let mut read_buffer = BytesMut::with_capacity(8192);
 
-        let mut columns: Vec<ColumnStorage> = Vec::new();
+        let mut done = false;
 
-        loop {
-            read_buffer.reserve(8192);
+        while !done {
             let n = {
                 read_buffer.reserve(8192);
                 let dst = read_buffer.chunk_mut();
                 let buf: &mut [u8] =
                     unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
-                let n = stream.read(buf)?;
+                let n = stream.read(buf).await?;
                 unsafe {
                     read_buffer.advance_mut(n);
                 }
@@ -203,21 +233,26 @@ impl Client {
                             }
                         }
                     }
-
                     backend::Message::ReadyForQuery(_) => {
+                        done = true;
                         break;
                     }
-
                     backend::Message::ErrorResponse(error) => {
                         print_error(error);
                     }
                     _ => {}
                 }
             }
+        }
 
-            if read_buffer.is_empty() {
-                break;
-            }
+        if prepare {
+            prepared_statements.insert(
+                name.clone(),
+                PreparedStatementInfo {
+                    param_types: param_types.clone(),
+                    columns: clone_storages(&columns),
+                },
+            );
         }
 
         Ok(DataFrame::from_iter(

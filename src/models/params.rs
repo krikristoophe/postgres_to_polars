@@ -1,5 +1,6 @@
 use postgres_protocol::Oid;
 
+#[derive(Debug, Clone)]
 pub enum BinaryParam {
     Int4(i32),
     Text(String),

@@ -6,6 +6,7 @@ use postgres_protocol::message::backend::Field;
 
 use crate::utils::text_array::parse_text_array;
 
+#[derive(Debug, Clone)]
 pub struct ColumnResult<T> {
     pub name: String,
     pub data: Vec<Option<T>>,
@@ -34,8 +35,16 @@ impl<T> ColumnResult<T> {
             self.data.reserve(1024);
         }
     }
+
+    fn clone_empty(&self) -> Self {
+        ColumnResult {
+            name: self.name.clone(),
+            data: Vec::with_capacity(1024),
+        }
+    }
 }
 
+#[derive(Debug, Clone)]
 pub enum ColumnStorage {
     Ints(ColumnResult<i32>),
     Texts(ColumnResult<String>),
@@ -141,7 +150,9 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         ColumnStorage::Times(col) => match value {
             Some(bytes) if bytes.len() == 8 => {
                 let micros_since_midnight = i64::from_be_bytes(bytes.try_into().unwrap());
-                col.push(micros_since_midnight);
+
+                let nanos_since_midnight = micros_since_midnight * 1000;
+                col.push(nanos_since_midnight);
             }
             _ => col.push_null(),
         },
@@ -178,4 +189,23 @@ pub fn text_array_to_series(name: &str, data: Vec<Option<Vec<Option<String>>>>) 
         .collect();
 
     list_chunked.into_series().with_name(name.into())
+}
+
+pub fn clone_storages(columns: &Vec<ColumnStorage>) -> Vec<ColumnStorage> {
+    let mut copy = Vec::with_capacity(columns.len());
+    for column in columns {
+        copy.push(match column {
+            ColumnStorage::Ints(col) => ColumnStorage::Ints(col.clone_empty()),
+            ColumnStorage::Texts(col) => ColumnStorage::Texts(col.clone_empty()),
+            ColumnStorage::Bools(col) => ColumnStorage::Bools(col.clone_empty()),
+            ColumnStorage::Bytes(col) => ColumnStorage::Bytes(col.clone_empty()),
+            ColumnStorage::Dates(col) => ColumnStorage::Dates(col.clone_empty()),
+            ColumnStorage::TextArray(col) => ColumnStorage::TextArray(col.clone_empty()),
+            ColumnStorage::Timestamps(col) => ColumnStorage::Timestamps(col.clone_empty()),
+            ColumnStorage::Doubles(col) => ColumnStorage::Doubles(col.clone_empty()),
+            ColumnStorage::TimestampsWtz(col) => ColumnStorage::TimestampsWtz(col.clone_empty()),
+            ColumnStorage::Times(col) => ColumnStorage::Times(col.clone_empty()),
+        });
+    }
+    copy
 }

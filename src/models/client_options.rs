@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub struct ClientOptions {
     pub user: String,
     pub password: String,
