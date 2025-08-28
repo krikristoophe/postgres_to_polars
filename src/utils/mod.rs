@@ -14,7 +14,7 @@ pub fn md5_hash(user: &str, password: &str, salt: &[u8; 4]) -> String {
     let mut outer = md5::Context::new();
     outer.consume(inner_hex.as_bytes());
     outer.consume(salt);
-    let final_hash = outer.compute();
+    let final_hash = outer.finalize();
 
     // Préfixer par "md5"
     format!("md5{:x}", final_hash)
