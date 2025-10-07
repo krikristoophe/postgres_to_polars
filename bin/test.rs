@@ -31,14 +31,14 @@ async fn main() -> anyhow::Result<()> {
 
     let params = vec![Some(BinaryParam::Int4(24))];
 
-    let results: Vec<anyhow::Result<Duration>> = futures::future::join_all((0..10).map(|_| {
+    let results: Vec<anyhow::Result<Duration>> = futures::future::join_all((0..400).map(|_| {
         let query = query.to_string();
         let params = params.clone();
         let pool = pool.clone();
 
         async move {
             let t0 = Instant::now();
-            let client_ref = pool.acquire().await?;
+            let mut client_ref = pool.acquire().await?;
             let client = client_ref.client();
             let _df = client.query(&query, params).await?;
             let t1 = Instant::now();

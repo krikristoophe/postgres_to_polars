@@ -18,8 +18,8 @@ pub struct ClientRef {
 }
 
 impl ClientRef {
-    pub fn client(&self) -> &Client {
-        &self.client
+    pub fn client(&mut self) -> Arc<Client> {
+        self.client.clone()
     }
 }
 
@@ -28,6 +28,13 @@ impl Drop for ClientRef {
         let client = Arc::clone(&self.client);
         let pool = Arc::clone(&self.pool);
         tokio::spawn(async move {
+            let is_healthy = { client.is_healthy.lock().await.clone() };
+            let client = if !is_healthy {
+                Arc::new(client.replace().await)
+            } else {
+                client
+            };
+
             let mut locked = pool.lock().await;
             locked.push(client);
         });

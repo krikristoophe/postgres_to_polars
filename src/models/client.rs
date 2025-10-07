@@ -12,20 +12,19 @@ use fallible_iterator::FallibleIterator;
 use polars::prelude::*;
 use postgres_protocol::IsNull;
 use postgres_protocol::message::backend;
-use postgres_protocol::message::backend::DataRowRanges;
 use postgres_protocol::message::frontend;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tracing::debug;
 
 #[derive(Debug, Clone)]
 struct PreparedStatementInfo {
-    param_types: Vec<u32>, // c’est ce que tu passes à `parse`
+    param_types: Vec<u32>,
     columns: Vec<ColumnStorage>,
 }
 
 pub struct Client {
+    pub is_healthy: Mutex<bool>,
     options: ClientOptions,
     stream: Arc<Mutex<TcpStream>>,
     prepared_statements: Mutex<HashMap<String, PreparedStatementInfo>>,
@@ -35,10 +34,15 @@ impl Client {
     pub async fn new(options: ClientOptions) -> Self {
         let stream = TcpStream::connect(options.connect_url()).await.unwrap();
         Client {
+            is_healthy: Mutex::new(true),
             options,
             stream: Arc::new(Mutex::new(stream)),
             prepared_statements: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub async fn replace(&self) -> Self {
+        Client::new(self.options.clone()).await
     }
 
     pub async fn connect(&self) -> anyhow::Result<()> {
@@ -210,6 +214,7 @@ impl Client {
             while let Some(message) = backend::Message::parse(&mut read_buffer)? {
                 match message {
                     backend::Message::RowDescription(desc) => {
+                        columns.clear();
                         let fields = desc.fields().iterator();
                         for field in fields {
                             let f = field?;
@@ -219,29 +224,50 @@ impl Client {
                     }
                     backend::Message::DataRow(row) => {
                         let buf = row.buffer();
-                        let mut ranges: DataRowRanges<'_> = row.ranges();
+                        let mut ranges = row.ranges(); // FallibleIterator
 
-                        for col in columns.iter_mut() {
-                            let range = ranges.next().unwrap();
-                            match range {
-                                Some(Some(range)) => {
-                                    let bytes = &buf[range];
-
-                                    push_column_value(col, Some(bytes));
-                                }
+                        for (i, col) in columns.iter_mut().enumerate() {
+                            let next = ranges.next()?; // Result<Option<Option<Range>>>
+                            match next {
+                                Some(Some(r)) => push_column_value(col, Some(&buf[r])),
                                 Some(None) => push_column_value(col, None),
                                 None => {
-                                    debug!("no data");
+                                    prepared_statements.remove(&name);
+                                    // trop peu de champs côté serveur
+                                    return Err(anyhow::anyhow!(
+                                        "Row has fewer fields ({i}) than expected ({})",
+                                        columns.len()
+                                    ));
                                 }
                             }
                         }
+                        // champs en trop ?
+                        if ranges.next()?.is_some() {
+                            prepared_statements.remove(&name);
+                            return Err(anyhow::anyhow!(
+                                "Row has more fields than expected (columns={})",
+                                columns.len()
+                            ));
+                        }
+                    }
+                    backend::Message::NoData => {
+                        done = true;
+                        let mut is_healthy = self.is_healthy.lock().await;
+                        *is_healthy = true;
+                        break;
                     }
                     backend::Message::ReadyForQuery(_) => {
                         done = true;
+                        let mut is_healthy = self.is_healthy.lock().await;
+                        *is_healthy = true;
                         break;
                     }
                     backend::Message::ErrorResponse(error) => {
                         print_error(error);
+                        done = true;
+                        let mut is_healthy = self.is_healthy.lock().await;
+                        *is_healthy = false;
+                        break;
                     }
                     _ => {}
                 }
