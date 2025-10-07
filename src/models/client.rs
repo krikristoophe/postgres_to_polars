@@ -17,6 +17,7 @@ use postgres_protocol::message::frontend;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 struct PreparedStatementInfo {
@@ -229,7 +230,9 @@ impl Client {
                                     push_column_value(col, Some(bytes));
                                 }
                                 Some(None) => push_column_value(col, None),
-                                None => panic!("no data"),
+                                None => {
+                                    debug!("no data");
+                                }
                             }
                         }
                     }
