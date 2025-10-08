@@ -1,9 +1,6 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use postgres_to_polars::{BinaryParam, ClientOptions, Pool, PoolOptions};
+use postgres_to_polars::{BinaryParam, ClientOptions, PoolOptions, build_pool};
 
 const USERNAME: &str = "POSTGRES_USER";
 const PASSWORD: &str = "pgpassword";
@@ -19,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
         5432,
     );
     let pool_options = PoolOptions::new(client_options, 10);
-    let pool = Arc::new(Pool::new(pool_options).await?);
+    let pool = build_pool(pool_options).await?;
 
     let query = "
         SELECT
@@ -31,15 +28,17 @@ async fn main() -> anyhow::Result<()> {
 
     let params = vec![Some(BinaryParam::Int4(24))];
 
-    let results: Vec<anyhow::Result<Duration>> = futures::future::join_all((0..400).map(|_| {
+    let results: Vec<anyhow::Result<Duration>> = futures::future::join_all((0..40).map(|_| {
         let query = query.to_string();
         let params = params.clone();
         let pool = pool.clone();
 
         async move {
             let t0 = Instant::now();
-            let mut client_ref = pool.acquire().await?;
-            let client = client_ref.client();
+            let client = pool
+                .get()
+                .await
+                .map_err(|e| anyhow::anyhow!("bb8 get failed: {e:?}"))?;
             let _df = client.query(&query, params).await?;
             let t1 = Instant::now();
             Ok(t1.duration_since(t0))

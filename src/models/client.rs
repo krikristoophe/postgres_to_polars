@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::client_options::ClientOptions;
 use super::params::BinaryParam;
@@ -24,7 +25,7 @@ struct PreparedStatementInfo {
 }
 
 pub struct Client {
-    pub is_healthy: Mutex<bool>,
+    healthy: AtomicBool,
     options: ClientOptions,
     stream: Arc<Mutex<TcpStream>>,
     prepared_statements: Mutex<HashMap<String, PreparedStatementInfo>>,
@@ -34,7 +35,7 @@ impl Client {
     pub async fn new(options: ClientOptions) -> Self {
         let stream = TcpStream::connect(options.connect_url()).await.unwrap();
         Client {
-            is_healthy: Mutex::new(true),
+            healthy: AtomicBool::new(false),
             options,
             stream: Arc::new(Mutex::new(stream)),
             prepared_statements: Mutex::new(HashMap::new()),
@@ -114,6 +115,8 @@ impl Client {
                 break;
             }
         }
+
+        self.mark_healthy();
 
         Ok(())
     }
@@ -252,21 +255,18 @@ impl Client {
                     }
                     backend::Message::NoData => {
                         done = true;
-                        let mut is_healthy = self.is_healthy.lock().await;
-                        *is_healthy = true;
+                        self.mark_healthy();
                         break;
                     }
                     backend::Message::ReadyForQuery(_) => {
                         done = true;
-                        let mut is_healthy = self.is_healthy.lock().await;
-                        *is_healthy = true;
+                        self.mark_healthy();
                         break;
                     }
                     backend::Message::ErrorResponse(error) => {
                         print_error(error);
                         done = true;
-                        let mut is_healthy = self.is_healthy.lock().await;
-                        *is_healthy = false;
+                        self.mark_unhealthy();
                         break;
                     }
                     _ => {}
@@ -287,5 +287,54 @@ impl Client {
         Ok(DataFrame::from_iter(
             columns.into_iter().map(|col| column_to_series(col)),
         ))
+    }
+
+    pub fn has_broken(&self) -> bool {
+        !self.healthy.load(Ordering::Relaxed)
+    }
+
+    fn mark_unhealthy(&self) {
+        self.healthy.store(false, Ordering::Relaxed);
+    }
+    fn mark_healthy(&self) {
+        self.healthy.store(true, Ordering::Relaxed);
+    }
+
+    pub async fn ping(&self) -> anyhow::Result<()> {
+        let mut stream = self.stream.lock().await;
+        let mut buf = BytesMut::new();
+        frontend::query("/* ping */ SELECT 1", &mut buf)?;
+        stream.write_all(&buf).await?;
+
+        // Lire jusqu'à ReadyForQuery (drain complet)
+        let mut read_buffer = BytesMut::with_capacity(4096);
+        loop {
+            read_buffer.reserve(4096);
+            let dst = read_buffer.chunk_mut();
+            let buf: &mut [u8] =
+                unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
+            let n = stream.read(buf).await?;
+            unsafe {
+                read_buffer.advance_mut(n);
+            }
+            if n == 0 {
+                anyhow::bail!("connection closed during ping");
+            }
+
+            while let Some(m) = backend::Message::parse(&mut read_buffer)? {
+                match m {
+                    backend::Message::ReadyForQuery(_) => {
+                        self.mark_healthy();
+                        return Ok(());
+                    }
+                    backend::Message::ErrorResponse(e) => {
+                        print_error(e);
+                        self.mark_unhealthy();
+                        anyhow::bail!("ping failed");
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
