@@ -3,10 +3,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::client_options::ClientOptions;
 use super::params::BinaryParam;
+use crate::PgToPlError;
 use crate::models::column_result::{
     ColumnStorage, clone_storages, column_from_field, column_to_series, push_column_value,
 };
 use crate::models::params::format_params;
+use crate::utils::error::PgToPlResult;
 use crate::utils::{md5_hash, print_error, statement_name};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
@@ -29,6 +31,7 @@ pub struct Client {
     options: ClientOptions,
     stream: Arc<Mutex<TcpStream>>,
     prepared_statements: Mutex<HashMap<String, PreparedStatementInfo>>,
+    portal_count: Mutex<i32>,
 }
 
 impl Client {
@@ -39,6 +42,7 @@ impl Client {
             options,
             stream: Arc::new(Mutex::new(stream)),
             prepared_statements: Mutex::new(HashMap::new()),
+            portal_count: Mutex::new(0),
         }
     }
 
@@ -46,7 +50,7 @@ impl Client {
         Client::new(self.options.clone()).await
     }
 
-    pub async fn connect(&self) -> anyhow::Result<()> {
+    pub async fn connect(&self) -> PgToPlResult<()> {
         let mut stream = self.stream.lock().await;
         // Handshake initial
         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
@@ -121,11 +125,16 @@ impl Client {
         Ok(())
     }
 
-    pub async fn query<P>(&self, query: &str, params: P) -> anyhow::Result<DataFrame>
+    pub async fn query<P>(&self, query: &str, params: P) -> PgToPlResult<DataFrame>
     where
         P: IntoIterator<Item = Option<BinaryParam>>,
     {
-        let portal_name = format!("portal_{}", uuid::Uuid::new_v4());
+        let portal_count = {
+            let mut count = self.portal_count.lock().await;
+            *count += 1;
+            *count
+        };
+        let portal_name = format!("portal_{}", portal_count);
         let mut stream = self.stream.lock().await;
         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
 
@@ -177,7 +186,7 @@ impl Client {
             [1],
             &mut buf,
         )
-        .map_err(|_| anyhow::anyhow!("bind error"))?;
+        .map_err(|_| PgToPlError::BindError)?;
         stream.write_all(&buf).await?;
 
         // Étape 3 : Execute
@@ -237,20 +246,14 @@ impl Client {
                                 None => {
                                     prepared_statements.remove(&name);
                                     // trop peu de champs côté serveur
-                                    return Err(anyhow::anyhow!(
-                                        "Row has fewer fields ({i}) than expected ({})",
-                                        columns.len()
-                                    ));
+                                    return Err(PgToPlError::TooFewField(i, columns.len()));
                                 }
                             }
                         }
                         // champs en trop ?
                         if ranges.next()?.is_some() {
                             prepared_statements.remove(&name);
-                            return Err(anyhow::anyhow!(
-                                "Row has more fields than expected (columns={})",
-                                columns.len()
-                            ));
+                            return Err(PgToPlError::TooManyField(columns.len()));
                         }
                     }
                     backend::Message::NoData => {
@@ -300,7 +303,7 @@ impl Client {
         self.healthy.store(true, Ordering::Relaxed);
     }
 
-    pub async fn ping(&self) -> anyhow::Result<()> {
+    pub async fn ping(&self) -> PgToPlResult<()> {
         let mut stream = self.stream.lock().await;
         let mut buf = BytesMut::new();
         frontend::query("/* ping */ SELECT 1", &mut buf)?;
@@ -318,7 +321,7 @@ impl Client {
                 read_buffer.advance_mut(n);
             }
             if n == 0 {
-                anyhow::bail!("connection closed during ping");
+                return Err(PgToPlError::ConnectionClosed);
             }
 
             while let Some(m) = backend::Message::parse(&mut read_buffer)? {
@@ -330,7 +333,7 @@ impl Client {
                     backend::Message::ErrorResponse(e) => {
                         print_error(e);
                         self.mark_unhealthy();
-                        anyhow::bail!("ping failed");
+                        return Err(PgToPlError::PingFailed);
                     }
                     _ => {}
                 }

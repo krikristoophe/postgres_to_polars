@@ -7,3 +7,4 @@ pub use models::params::BinaryParam;
 pub use models::pool::PgToPlPool;
 pub use models::pool::build_pool;
 pub use models::pool_options::PoolOptions;
+pub use utils::error::{PgToPlError, PgToPlResult};

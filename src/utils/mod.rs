@@ -1,6 +1,7 @@
 use fallible_iterator::FallibleIterator;
 use postgres_protocol::message::backend::ErrorResponseBody;
 
+pub mod error;
 pub mod text_array;
 
 pub fn md5_hash(user: &str, password: &str, salt: &[u8; 4]) -> String {

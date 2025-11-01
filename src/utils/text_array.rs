@@ -1,13 +1,15 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io;
 
-pub fn parse_text_array(mut bytes: &[u8]) -> anyhow::Result<Vec<Option<String>>> {
+use crate::{PgToPlError, utils::error::PgToPlResult};
+
+pub fn parse_text_array(mut bytes: &[u8]) -> PgToPlResult<Vec<Option<String>>> {
     let ndim = bytes.read_i32::<BigEndian>()?;
     if ndim == 0 {
         return Ok(Vec::new()); // tableau vide
     } else if ndim != 1 {
         println!("ndim {}", ndim);
-        return Err(anyhow::anyhow!("Only 1D arrays supported"));
+        return Err(PgToPlError::OnlyOneDimensionArraySupported);
     }
 
     let _has_null = bytes.read_i32::<BigEndian>()?;
@@ -25,7 +27,7 @@ pub fn parse_text_array(mut bytes: &[u8]) -> anyhow::Result<Vec<Option<String>>>
         } else {
             let item_len = item_len as usize;
             if bytes.len() < item_len {
-                return Err(anyhow::anyhow!("Not enough bytes"));
+                return Err(PgToPlError::NotEnoughBytes);
             }
             let (str_bytes, rest) = bytes.split_at(item_len);
             bytes = rest;

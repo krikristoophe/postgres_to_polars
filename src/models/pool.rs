@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bb8::{ManageConnection, Pool};
 
-use crate::{Client, ClientOptions, PoolOptions};
+use crate::{Client, ClientOptions, PgToPlError, PoolOptions, utils::error::PgToPlResult};
 
 pub struct ClientManager {
     pub options: ClientOptions,
@@ -11,7 +11,7 @@ pub struct ClientManager {
 //#[async_trait]
 impl ManageConnection for ClientManager {
     type Connection = Client;
-    type Error = anyhow::Error;
+    type Error = PgToPlError;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
         let client = Client::new(self.options.clone()).await;
@@ -28,7 +28,7 @@ impl ManageConnection for ClientManager {
     }
 }
 
-pub async fn build_pool(opts: PoolOptions) -> anyhow::Result<Pool<ClientManager>> {
+pub async fn build_pool(opts: PoolOptions) -> PgToPlResult<Pool<ClientManager>> {
     let mgr = ClientManager {
         options: opts.client_options,
     };
