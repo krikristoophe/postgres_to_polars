@@ -157,7 +157,7 @@ mod tests {
     async fn test_pool_error_handling_retry_loop() {
         let client_options = create_test_client_option();
 
-        let pool_options = PoolOptions::new(client_options, 10);
+        let pool_options = PoolOptions::new(client_options, 10, 5);
         let pool = build_pool(pool_options).await.expect("Pool failed");
 
         for _ in 0..1000 {
@@ -179,7 +179,7 @@ mod tests {
     async fn test_pool_concurrent_error_handling_retry_loop() {
         let client_options = create_test_client_option();
 
-        let pool_options = PoolOptions::new(client_options, 10);
+        let pool_options = PoolOptions::new(client_options, 10, 5);
         let pool = build_pool(pool_options).await.expect("Pool failed");
         let pool = Arc::new(pool);
 

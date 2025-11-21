@@ -34,7 +34,7 @@ pub async fn build_pool(opts: PoolOptions) -> PgToPlResult<Pool<ClientManager>> 
     };
     let pool = Pool::builder()
         .max_size(opts.max_connections)
-        .connection_timeout(Duration::from_secs(5))
+        .connection_timeout(Duration::from_secs(opts.acquire_timeout))
         .idle_timeout(Some(Duration::from_secs(60)))
         .max_lifetime(Some(Duration::from_secs(30 * 60)))
         .test_on_check_out(true)

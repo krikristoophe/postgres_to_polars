@@ -19,7 +19,7 @@ async fn main() -> PgToPlResult<()> {
         5432,
         true,
     );
-    let pool_options = PoolOptions::new(client_options, 10);
+    let pool_options = PoolOptions::new(client_options, 10, 5);
     let pool = build_pool(pool_options).await?;
 
     let query = "
