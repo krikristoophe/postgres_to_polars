@@ -12,6 +12,7 @@ use crate::utils::error::PgToPlResult;
 use crate::utils::{md5_hash, print_error, statement_name};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
+use nanoid::nanoid;
 use polars::prelude::*;
 use postgres_protocol::IsNull;
 use postgres_protocol::message::backend;
@@ -140,7 +141,11 @@ impl Client {
 
         let (param_types, param_values) = format_params(params);
 
-        let name = statement_name(query);
+        let name = if self.options.prepare {
+            statement_name(query)
+        } else {
+            nanoid!()
+        };
         let mut prepared_statements = self.prepared_statements.lock().await;
 
         let cached_statement = prepared_statements.get(&name);
@@ -277,7 +282,7 @@ impl Client {
             }
         }
 
-        if prepare {
+        if prepare && self.options.prepare {
             prepared_statements.insert(
                 name.clone(),
                 PreparedStatementInfo {

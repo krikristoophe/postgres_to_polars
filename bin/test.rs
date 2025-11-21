@@ -17,6 +17,7 @@ async fn main() -> PgToPlResult<()> {
         String::from(DATABASE),
         String::from("127.0.0.1"),
         5432,
+        true,
     );
     let pool_options = PoolOptions::new(client_options, 10);
     let pool = build_pool(pool_options).await?;
