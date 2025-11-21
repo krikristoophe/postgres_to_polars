@@ -69,6 +69,8 @@ impl Client {
 
         let mut read_buffer = BytesMut::with_capacity(8192);
 
+        let mut error_to_return: Option<String> = None;
+
         loop {
             read_buffer.reserve(8192);
             let n = {
@@ -84,7 +86,7 @@ impl Client {
             };
 
             if n == 0 {
-                break; // Connexion fermée
+                return Err(PgToPlError::ConnectionClosed);
             }
 
             let mut ready = false;
@@ -93,10 +95,22 @@ impl Client {
                 match message {
                     backend::Message::ReadyForQuery(_) => {
                         ready = true;
+                        if let Some(err_msg) = error_to_return {
+                            self.mark_unhealthy();
+                            return Err(PgToPlError::QueryError(err_msg));
+                        }
+
+                        self.mark_healthy();
                         break;
                     }
                     backend::Message::ErrorResponse(error) => {
+                        let error_msg = error_to_string(&error);
+
                         print_error(&error);
+
+                        if error_to_return.is_none() {
+                            error_to_return = Some(error_msg);
+                        }
                     }
                     backend::Message::AuthenticationCleartextPassword => {
                         println!("Authentication: Cleartext password requested");
@@ -250,20 +264,21 @@ impl Client {
                                 None => {
                                     prepared_statements.remove(&name);
                                     // trop peu de champs côté serveur
-                                    return Err(PgToPlError::TooFewField(i, columns.len()));
+                                    error_to_return = Some(format!(
+                                        "Too few fields: expected {}, got {}",
+                                        columns.len(),
+                                        i
+                                    ));
+                                    break;
                                 }
                             }
                         }
                         // champs en trop ?
-                        if ranges.next()?.is_some() {
+                        if error_to_return.is_none() && ranges.next()?.is_some() {
                             prepared_statements.remove(&name);
-                            return Err(PgToPlError::TooManyField(columns.len()));
+                            error_to_return =
+                                Some(format!("Too many fields: expected {}", columns.len()));
                         }
-                    }
-                    backend::Message::NoData => {
-                        done = true;
-                        self.mark_healthy();
-                        break;
                     }
                     backend::Message::ReadyForQuery(_) => {
                         done = true;
@@ -321,6 +336,8 @@ impl Client {
 
         // Lire jusqu'à ReadyForQuery (drain complet)
         let mut read_buffer = BytesMut::with_capacity(4096);
+        let mut error_to_return: Option<String> = None;
+
         loop {
             read_buffer.reserve(4096);
             let dst = read_buffer.chunk_mut();
@@ -337,12 +354,20 @@ impl Client {
             while let Some(m) = backend::Message::parse(&mut read_buffer)? {
                 match m {
                     backend::Message::ReadyForQuery(_) => {
+                        if let Some(err_msg) = error_to_return {
+                            self.mark_unhealthy();
+                            return Err(PgToPlError::QueryError(err_msg));
+                        }
+
                         self.mark_healthy();
                         return Ok(());
                     }
-                    backend::Message::ErrorResponse(e) => {
-                        self.mark_unhealthy();
-                        return Err(PgToPlError::PingFailed(error_to_string(&e)));
+                    backend::Message::ErrorResponse(error) => {
+                        let error_msg = error_to_string(&error);
+
+                        if error_to_return.is_none() {
+                            error_to_return = Some(error_msg);
+                        }
                     }
                     _ => {}
                 }

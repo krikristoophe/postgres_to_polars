@@ -48,6 +48,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_no_data_query() {
+        // Configuration du client
+        let options = create_test_client_option();
+
+        // Création et connexion du client
+        let client = Client::new(options).await;
+        client.connect().await.expect("Failed to connect");
+
+        // Exécution de la requête
+        let result = client.query("SELECT 1;", vec![]).await;
+
+        match result {
+            Ok(df) => {
+                // Assertions basiques
+                assert!(df.height() == 1, "Should have 1 rows");
+            }
+            Err(e) => {
+                panic!("Query failed: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn test_query_with_params() {
         let options = create_test_client_option();
 
