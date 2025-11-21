@@ -14,12 +14,16 @@ pub enum PgToPlError {
     TooFewField(usize, usize),
     #[error("Row has more fields than expected ({0})")]
     TooManyField(usize),
-    #[error("Ping failed")]
-    PingFailed,
+    #[error("Ping failed : {0}")]
+    PingFailed(String),
     #[error("Connection closed")]
     ConnectionClosed,
     #[error("Pool error {0}")]
     PoolError(String),
+    #[error("Parameter type mismatch")]
+    ParamTypeMismatch,
+    #[error("Query error: {0}")]
+    QueryError(String),
 }
 
 pub type PgToPlResult<T> = Result<T, PgToPlError>;

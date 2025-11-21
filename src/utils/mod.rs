@@ -26,19 +26,26 @@ pub fn statement_name(query: &str) -> String {
     format!("stmt_{:x}", digest) // Toujours 32 caractères
 }
 
-pub fn print_error(err: ErrorResponseBody) {
+pub fn print_error(err: &ErrorResponseBody) {
+    println!("Received error: {:?}", error_to_string(err));
+}
+
+pub fn error_to_string(err: &ErrorResponseBody) -> String {
     let fields = err.fields().iterator();
+    let mut error_strings = Vec::with_capacity(5);
     for field in fields {
         match field {
             Ok(f) => {
                 let bytes = f.value_bytes();
                 let value = String::from_utf8_lossy(&bytes);
-                println!("Received error field: {:?}", value);
+
+                error_strings.push(value.to_string());
             }
             Err(err) => {
-                println!("Error parsing error field: {:?}", err);
+                error_strings.push(format!("Error parsing error field: {:?}", err));
                 break;
             }
         }
     }
+    error_strings.join("\n").to_string()
 }

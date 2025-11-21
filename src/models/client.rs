@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::client_options::ClientOptions;
@@ -9,7 +10,7 @@ use crate::models::column_result::{
 };
 use crate::models::params::format_params;
 use crate::utils::error::PgToPlResult;
-use crate::utils::{md5_hash, print_error, statement_name};
+use crate::utils::{error_to_string, md5_hash, print_error, statement_name};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use nanoid::nanoid;
@@ -95,7 +96,7 @@ impl Client {
                         break;
                     }
                     backend::Message::ErrorResponse(error) => {
-                        print_error(error);
+                        print_error(&error);
                     }
                     backend::Message::AuthenticationCleartextPassword => {
                         println!("Authentication: Cleartext password requested");
@@ -136,7 +137,7 @@ impl Client {
             *count
         };
         let portal_name = format!("portal_{}", portal_count);
-        let mut stream = self.stream.lock().await;
+
         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
 
         let (param_types, param_values) = format_params(params);
@@ -148,22 +149,17 @@ impl Client {
         };
         let mut prepared_statements = self.prepared_statements.lock().await;
 
-        let cached_statement = prepared_statements.get(&name);
-
-        let prepare = match cached_statement {
+        let (prepare, mut columns) = match prepared_statements.get(&name) {
             Some(info) => {
                 if info.param_types != param_types {
-                    panic!("Same statement name but different param types!");
+                    return Err(PgToPlError::ParamTypeMismatch);
                 }
-                false
+                (false, info.columns.clone())
             }
-            None => true,
+            None => (true, Vec::new()),
         };
 
-        let mut columns = match cached_statement {
-            Some(info) => info.columns.clone(),
-            None => Vec::new(),
-        };
+        let mut stream = self.stream.lock().await;
 
         if prepare {
             frontend::parse(&name, query, param_types.iter().copied(), &mut buf)?;
@@ -212,6 +208,8 @@ impl Client {
 
         let mut done = false;
 
+        let mut error_to_return: Option<String> = None;
+
         while !done {
             let n = {
                 read_buffer.reserve(8192);
@@ -226,7 +224,8 @@ impl Client {
             };
 
             if n == 0 {
-                break; // Connexion fermée
+                self.mark_unhealthy();
+                return Err(PgToPlError::ConnectionClosed);
             }
             while let Some(message) = backend::Message::parse(&mut read_buffer)? {
                 match message {
@@ -268,14 +267,20 @@ impl Client {
                     }
                     backend::Message::ReadyForQuery(_) => {
                         done = true;
+                        if let Some(err_msg) = error_to_return {
+                            self.mark_unhealthy();
+                            return Err(PgToPlError::QueryError(err_msg));
+                        }
+
                         self.mark_healthy();
                         break;
                     }
                     backend::Message::ErrorResponse(error) => {
-                        print_error(error);
-                        done = true;
-                        self.mark_unhealthy();
-                        break;
+                        let error_msg = error_to_string(&error);
+
+                        if error_to_return.is_none() {
+                            error_to_return = Some(error_msg);
+                        }
                     }
                     _ => {}
                 }
@@ -336,9 +341,8 @@ impl Client {
                         return Ok(());
                     }
                     backend::Message::ErrorResponse(e) => {
-                        print_error(e);
                         self.mark_unhealthy();
-                        return Err(PgToPlError::PingFailed);
+                        return Err(PgToPlError::PingFailed(error_to_string(&e)));
                     }
                     _ => {}
                 }
