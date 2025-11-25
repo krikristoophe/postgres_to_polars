@@ -183,12 +183,16 @@ pub fn column_to_series(column: ColumnStorage) -> Series {
 }
 
 pub fn text_array_to_series(name: &str, data: Vec<Option<Vec<Option<String>>>>) -> Series {
-    let list_chunked: ListChunked = data
-        .into_iter()
-        .map(|maybe_vec| maybe_vec.map(|v| Series::new("".into(), v)))
-        .collect();
+    if data.is_empty() {
+        Series::new_empty(name.into(), &DataType::List(Box::new(DataType::String)))
+    } else {
+        let list_chunked: ListChunked = data
+            .into_iter()
+            .map(|maybe_vec| maybe_vec.map(|v| Series::new("".into(), v)))
+            .collect();
 
-    list_chunked.into_series().with_name(name.into())
+        list_chunked.into_series().with_name(name.into())
+    }
 }
 
 pub fn clone_storages(columns: &Vec<ColumnStorage>) -> Vec<ColumnStorage> {

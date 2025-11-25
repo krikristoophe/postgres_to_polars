@@ -19,6 +19,7 @@ fn create_test_client_option() -> ClientOptions {
 mod tests {
     use std::sync::Arc;
 
+    use polars::prelude::{DataType, SchemaExt};
     use postgres_to_polars::{BinaryParam, Client, PoolOptions, build_pool};
     use tokio::task::JoinSet;
 
@@ -227,6 +228,68 @@ mod tests {
         // Attend que toutes les tâches se terminent
         while let Some(result) = join_set.join_next().await {
             result.expect("Task panicked");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_array_col_query() {
+        // Configuration du client
+        let options = create_test_client_option();
+
+        // Création et connexion du client
+        let client = Client::new(options).await;
+        client.connect().await.expect("Failed to connect");
+
+        // Exécution de la requête
+        let result = client
+            .query("SELECT tags from time_entries limit 1;", vec![])
+            .await;
+
+        match result {
+            Ok(df) => {
+                // Assertions basiques
+                assert!(df.height() == 1, "Should have 1 rows");
+
+                let schema = df.schema();
+
+                let tag_field = schema.get_field("tags").unwrap();
+
+                assert_eq!(tag_field.dtype, DataType::List(Box::new(DataType::String)));
+            }
+            Err(e) => {
+                panic!("Query failed: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_array_col_no_row_query() {
+        // Configuration du client
+        let options = create_test_client_option();
+
+        // Création et connexion du client
+        let client = Client::new(options).await;
+        client.connect().await.expect("Failed to connect");
+
+        // Exécution de la requête
+        let result = client
+            .query("SELECT tags from time_entries WHERE FALSE;", vec![])
+            .await;
+
+        match result {
+            Ok(df) => {
+                // Assertions basiques
+                assert!(df.height() == 0, "Should have 0 rows");
+
+                let schema = df.schema();
+
+                let tag_field = schema.get_field("tags").unwrap();
+
+                assert_eq!(tag_field.dtype, DataType::List(Box::new(DataType::String)));
+            }
+            Err(e) => {
+                panic!("Query failed: {:?}", e);
+            }
         }
     }
 }
