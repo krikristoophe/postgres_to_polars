@@ -20,6 +20,9 @@ impl ManageConnection for ClientManager {
     }
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
+        if conn.has_broken() {
+            return Err(PgToPlError::ConnectionBroken);
+        }
         conn.ping().await
     }
 

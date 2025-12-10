@@ -13,7 +13,6 @@ use crate::utils::error::PgToPlResult;
 use crate::utils::{error_to_string, md5_hash, print_error, statement_name};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
-use nanoid::nanoid;
 use polars::prelude::*;
 use postgres_protocol::IsNull;
 use postgres_protocol::message::backend;
@@ -159,7 +158,7 @@ impl Client {
         let name = if self.options.prepare {
             statement_name(query)
         } else {
-            nanoid!()
+            String::new()
         };
         let mut prepared_statements = self.prepared_statements.lock().await;
 
@@ -209,6 +208,7 @@ impl Client {
         frontend::execute(&portal_name, 0, &mut buf)?;
         stream.write_all(&buf).await?;
 
+        buf.clear();
         frontend::close(b'P', &portal_name, &mut buf)?;
         stream.write_all(&buf).await?;
 

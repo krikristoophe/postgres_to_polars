@@ -24,6 +24,8 @@ pub enum PgToPlError {
     ParamTypeMismatch,
     #[error("Query error: {0}")]
     QueryError(String),
+    #[error("Connection broken")]
+    ConnectionBroken,
 }
 
 pub type PgToPlResult<T> = Result<T, PgToPlError>;
