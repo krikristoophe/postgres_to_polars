@@ -161,143 +161,191 @@ impl Client {
             String::new()
         };
         let mut prepared_statements = self.prepared_statements.lock().await;
-
-        let (prepare, mut columns) = match prepared_statements.get(&name) {
-            Some(info) => {
-                if info.param_types != param_types {
-                    return Err(PgToPlError::ParamTypeMismatch);
-                }
-                (false, info.columns.clone())
-            }
-            None => (true, Vec::new()),
-        };
-
         let mut stream = self.stream.lock().await;
 
+        let (prepare, mut columns) = if self.options.prepare {
+            match prepared_statements.get(&name) {
+                Some(info) => {
+                    if info.param_types != param_types {
+                        return Err(PgToPlError::ParamTypeMismatch);
+                    }
+                    (false, info.columns.clone())
+                }
+                None => (true, Vec::new()),
+            }
+        } else {
+            (true, Vec::new())
+        };
+
+        let mut read_buffer = BytesMut::with_capacity(8192);
+
+        // Step 1 : Prepare the statement if not already prepared
         if prepare {
             frontend::parse(&name, query, param_types.iter().copied(), &mut buf)?;
+            frontend::describe(b'S', &name, &mut buf)?;
+            frontend::sync(&mut buf);
             stream.write_all(&buf).await?;
 
+            let mut done = false;
+
+            let mut error_to_return: Option<String> = None;
+
+            while !done {
+                let n = {
+                    read_buffer.reserve(8192);
+                    let dst = read_buffer.chunk_mut();
+                    let buf: &mut [u8] =
+                        unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
+                    let n = stream.read(buf).await?;
+                    unsafe {
+                        read_buffer.advance_mut(n);
+                    }
+                    n
+                };
+
+                if n == 0 {
+                    self.mark_unhealthy();
+                    return Err(PgToPlError::ConnectionClosed);
+                }
+
+                while let Some(message) = backend::Message::parse(&mut read_buffer)? {
+                    match message {
+                        backend::Message::RowDescription(desc) => {
+                            columns.clear();
+                            let fields = desc.fields().iterator();
+                            for field in fields {
+                                let f = field?;
+
+                                columns.push(column_from_field(&f))
+                            }
+                        }
+
+                        backend::Message::ReadyForQuery(_) => {
+                            done = true;
+                            if let Some(err_msg) = error_to_return {
+                                self.mark_unhealthy();
+                                return Err(PgToPlError::QueryError(err_msg));
+                            }
+
+                            self.mark_healthy();
+                            break;
+                        }
+                        backend::Message::ErrorResponse(error) => {
+                            let error_msg = error_to_string(&error);
+
+                            if error_to_return.is_none() {
+                                error_to_return = Some(error_msg);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Step 2 : Bind prepared statement to portal
+        {
             buf.clear();
-            frontend::describe(b'S', &name, &mut buf)?;
+            frontend::bind(
+                &portal_name,
+                &name,
+                std::iter::repeat(1).take(param_values.len()), // format binaire
+                param_values.iter(),
+                |val, buf| match val {
+                    Some(bytes) => {
+                        buf.put_slice(bytes);
+                        Ok(IsNull::No)
+                    }
+                    None => Ok(IsNull::Yes),
+                },
+                [1],
+                &mut buf,
+            )
+            .map_err(|_| PgToPlError::BindError)?;
             stream.write_all(&buf).await?;
         }
 
-        // Étape 2 : Bind avec result_format = binaire
-        buf.clear();
-        frontend::bind(
-            &portal_name,
-            &name,
-            std::iter::repeat(1).take(param_values.len()), // format binaire
-            param_values.iter(),
-            |val, buf| match val {
-                Some(bytes) => {
-                    buf.put_slice(bytes);
-                    Ok(IsNull::No)
-                }
-                None => Ok(IsNull::Yes),
-            },
-            [1],
-            &mut buf,
-        )
-        .map_err(|_| PgToPlError::BindError)?;
-        stream.write_all(&buf).await?;
+        // Step 3 : Execute
+        {
+            buf.clear();
+            frontend::execute(&portal_name, 0, &mut buf)?;
+            frontend::close(b'P', &portal_name, &mut buf)?;
+            frontend::sync(&mut buf);
+            stream.write_all(&buf).await?;
+        }
 
-        // Étape 3 : Execute
-        buf.clear();
-        frontend::execute(&portal_name, 0, &mut buf)?;
-        stream.write_all(&buf).await?;
+        // Step 4 : read response
+        {
+            read_buffer.clear();
+            let mut done = false;
+            let mut error_to_return: Option<String> = None;
 
-        buf.clear();
-        frontend::close(b'P', &portal_name, &mut buf)?;
-        stream.write_all(&buf).await?;
-
-        // Étape 4 : Sync
-        buf.clear();
-        frontend::sync(&mut buf);
-        stream.write_all(&buf).await?;
-
-        // Lire les messages de réponse
-        let mut read_buffer = BytesMut::with_capacity(8192);
-
-        let mut done = false;
-
-        let mut error_to_return: Option<String> = None;
-
-        while !done {
-            let n = {
-                read_buffer.reserve(8192);
-                let dst = read_buffer.chunk_mut();
-                let buf: &mut [u8] =
-                    unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
-                let n = stream.read(buf).await?;
-                unsafe {
-                    read_buffer.advance_mut(n);
-                }
-                n
-            };
-
-            if n == 0 {
-                self.mark_unhealthy();
-                return Err(PgToPlError::ConnectionClosed);
-            }
-            while let Some(message) = backend::Message::parse(&mut read_buffer)? {
-                match message {
-                    backend::Message::RowDescription(desc) => {
-                        columns.clear();
-                        let fields = desc.fields().iterator();
-                        for field in fields {
-                            let f = field?;
-
-                            columns.push(column_from_field(&f))
-                        }
+            while !done {
+                let n = {
+                    read_buffer.reserve(8192);
+                    let dst = read_buffer.chunk_mut();
+                    let buf: &mut [u8] =
+                        unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
+                    let n = stream.read(buf).await?;
+                    unsafe {
+                        read_buffer.advance_mut(n);
                     }
-                    backend::Message::DataRow(row) => {
-                        let buf = row.buffer();
-                        let mut ranges = row.ranges(); // FallibleIterator
+                    n
+                };
 
-                        for (i, col) in columns.iter_mut().enumerate() {
-                            let next = ranges.next()?; // Result<Option<Option<Range>>>
-                            match next {
-                                Some(Some(r)) => push_column_value(col, Some(&buf[r])),
-                                Some(None) => push_column_value(col, None),
-                                None => {
-                                    prepared_statements.remove(&name);
-                                    // trop peu de champs côté serveur
-                                    error_to_return = Some(format!(
-                                        "Too few fields: expected {}, got {}",
-                                        columns.len(),
-                                        i
-                                    ));
-                                    break;
+                if n == 0 {
+                    self.mark_unhealthy();
+                    return Err(PgToPlError::ConnectionClosed);
+                }
+                while let Some(message) = backend::Message::parse(&mut read_buffer)? {
+                    match message {
+                        backend::Message::DataRow(row) => {
+                            let buf = row.buffer();
+                            let mut ranges = row.ranges(); // FallibleIterator
+
+                            for (i, col) in columns.iter_mut().enumerate() {
+                                let next = ranges.next()?; // Result<Option<Option<Range>>>
+                                match next {
+                                    Some(Some(r)) => push_column_value(col, Some(&buf[r])),
+                                    Some(None) => push_column_value(col, None),
+                                    None => {
+                                        prepared_statements.remove(&name);
+                                        // trop peu de champs côté serveur
+                                        error_to_return = Some(format!(
+                                            "Too few fields: expected {}, got {}",
+                                            columns.len(),
+                                            i
+                                        ));
+                                        break;
+                                    }
                                 }
                             }
+                            // champs en trop ?
+                            if error_to_return.is_none() && ranges.next()?.is_some() {
+                                prepared_statements.remove(&name);
+                                error_to_return =
+                                    Some(format!("Too many fields: expected {}", columns.len()));
+                            }
                         }
-                        // champs en trop ?
-                        if error_to_return.is_none() && ranges.next()?.is_some() {
-                            prepared_statements.remove(&name);
-                            error_to_return =
-                                Some(format!("Too many fields: expected {}", columns.len()));
-                        }
-                    }
-                    backend::Message::ReadyForQuery(_) => {
-                        done = true;
-                        if let Some(err_msg) = error_to_return {
-                            self.mark_unhealthy();
-                            return Err(PgToPlError::QueryError(err_msg));
-                        }
+                        backend::Message::ReadyForQuery(_) => {
+                            done = true;
+                            if let Some(err_msg) = error_to_return {
+                                self.mark_unhealthy();
+                                return Err(PgToPlError::QueryError(err_msg));
+                            }
 
-                        self.mark_healthy();
-                        break;
-                    }
-                    backend::Message::ErrorResponse(error) => {
-                        let error_msg = error_to_string(&error);
-
-                        if error_to_return.is_none() {
-                            error_to_return = Some(error_msg);
+                            self.mark_healthy();
+                            break;
                         }
+                        backend::Message::ErrorResponse(error) => {
+                            let error_msg = error_to_string(&error);
+
+                            if error_to_return.is_none() {
+                                error_to_return = Some(error_msg);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
@@ -311,6 +359,9 @@ impl Client {
                 },
             );
         }
+
+        drop(stream);
+        drop(prepared_statements);
 
         Ok(DataFrame::from_iter(
             columns.into_iter().map(|col| column_to_series(col)),

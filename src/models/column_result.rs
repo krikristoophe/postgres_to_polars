@@ -64,7 +64,7 @@ pub fn column_from_field(field: &Field) -> ColumnStorage {
 
     match oid {
         23 => ColumnStorage::Ints(ColumnResult::new(name)), // int4
-        25 | 1043 => ColumnStorage::Texts(ColumnResult::new(name)), // text, varchar
+        25 | 1043 | 19 => ColumnStorage::Texts(ColumnResult::new(name)), // text, varchar
         16 => ColumnStorage::Bools(ColumnResult::new(name)), // bool
         1082 => ColumnStorage::Dates(ColumnResult::new(name)), // date
         1009 => ColumnStorage::TextArray(ColumnResult::new(name)), // text[]

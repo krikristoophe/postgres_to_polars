@@ -1,3 +1,4 @@
+use polars::prelude::PlSmallStr;
 use postgres_to_polars::{BinaryParam, ClientOptions, PoolOptions, build_pool};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +23,7 @@ fn create_test_client_option() -> ClientOptions {
 async fn load_test_simple() {
     let pool = build_pool(PoolOptions {
         client_options: create_test_client_option(),
-        max_connections: 10,
+        max_connections: 150,
         acquire_timeout: 5,
     })
     .await
@@ -54,8 +55,14 @@ async fn load_test_simple() {
                             )
                             .await
                         {
-                            Ok(_df) => {
-                                success.fetch_add(1, Ordering::Relaxed);
+                            Ok(df) => {
+                                let columns = df.get_column_names();
+                                if columns.contains(&&PlSmallStr::from_str("?column?")) {
+                                    eprintln!("❌ Task {} error: \"?column?\" returned", task_id);
+                                    errors.fetch_add(1, Ordering::Relaxed);
+                                } else {
+                                    success.fetch_add(1, Ordering::Relaxed);
+                                }
                             }
                             Err(e) => {
                                 eprintln!("❌ Query error task {}: {:?}", task_id, e);
@@ -102,7 +109,7 @@ async fn load_test_simple() {
 async fn load_test_mixed_queries() {
     let pool = build_pool(PoolOptions {
         client_options: create_test_client_option(),
-        max_connections: 10,
+        max_connections: 150,
         acquire_timeout: 5,
     })
     .await
@@ -160,10 +167,18 @@ async fn load_test_mixed_queries() {
                         };
 
                         match result {
-                            Ok(_) => success.fetch_add(1, Ordering::Relaxed),
+                            Ok(df) => {
+                                let columns = df.get_column_names();
+                                if columns.contains(&&PlSmallStr::from_str("?column?")) {
+                                    eprintln!("❌ Task {} error: \"?column?\" returned", task_id);
+                                    errors.fetch_add(1, Ordering::Relaxed);
+                                } else {
+                                    success.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
                             Err(e) => {
                                 eprintln!("❌ Task {} error: {:?}", task_id, e);
-                                errors.fetch_add(1, Ordering::Relaxed)
+                                errors.fetch_add(1, Ordering::Relaxed);
                             }
                         };
                     }
