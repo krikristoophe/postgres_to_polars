@@ -254,21 +254,18 @@ impl Client {
                 &mut buf,
             )
             .map_err(|_| PgToPlError::BindError)?;
-            stream.write_all(&buf).await?;
         }
 
         // Step 3 : Execute
         {
-            buf.clear();
             frontend::execute(&portal_name, 0, &mut buf)?;
-            //frontend::close(b'P', &portal_name, &mut buf)?;
             frontend::sync(&mut buf);
             stream.write_all(&buf).await?;
         }
 
         // Step 4 : read response
         {
-            read_buffer.clear();
+            //read_buffer.clear();
             let mut done = false;
             let mut error_to_return: Option<String> = None;
 
