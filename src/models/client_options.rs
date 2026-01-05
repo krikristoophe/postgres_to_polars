@@ -5,25 +5,16 @@ pub struct ClientOptions {
     pub database: String,
     pub host: String,
     pub port: u16,
-    pub prepare: bool,
 }
 
 impl ClientOptions {
-    pub fn new(
-        user: String,
-        password: String,
-        database: String,
-        host: String,
-        port: u16,
-        prepare: bool,
-    ) -> Self {
+    pub fn new(user: String, password: String, database: String, host: String, port: u16) -> Self {
         ClientOptions {
             user,
             password,
             database,
             host,
             port,
-            prepare,
         }
     }
 

@@ -15,7 +15,6 @@ fn create_test_client_option() -> ClientOptions {
         String::from(DATABASE),
         String::from("127.0.0.1"),
         5432,
-        true,
     )
 }
 
@@ -23,7 +22,7 @@ fn create_test_client_option() -> ClientOptions {
 async fn load_test_simple() {
     let pool = build_pool(PoolOptions {
         client_options: create_test_client_option(),
-        max_connections: 150,
+        max_connections: 10,
         acquire_timeout: 5,
     })
     .await
@@ -109,7 +108,7 @@ async fn load_test_simple() {
 async fn load_test_mixed_queries() {
     let pool = build_pool(PoolOptions {
         client_options: create_test_client_option(),
-        max_connections: 150,
+        max_connections: 10,
         acquire_timeout: 5,
     })
     .await

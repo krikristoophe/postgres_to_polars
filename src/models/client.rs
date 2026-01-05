@@ -155,26 +155,18 @@ impl Client {
 
         let (param_types, param_values) = format_params(params);
 
-        let name = if self.options.prepare {
-            statement_name(query)
-        } else {
-            String::new()
-        };
+        let name = statement_name(query);
         let mut prepared_statements = self.prepared_statements.lock().await;
         let mut stream = self.stream.lock().await;
 
-        let (prepare, mut columns) = if self.options.prepare {
-            match prepared_statements.get(&name) {
-                Some(info) => {
-                    if info.param_types != param_types {
-                        return Err(PgToPlError::ParamTypeMismatch);
-                    }
-                    (false, info.columns.clone())
+        let (prepare, mut columns) = match prepared_statements.get(&name) {
+            Some(info) => {
+                if info.param_types != param_types {
+                    return Err(PgToPlError::ParamTypeMismatch);
                 }
-                None => (true, Vec::new()),
+                (false, info.columns.clone())
             }
-        } else {
-            (true, Vec::new())
+            None => (true, Vec::new()),
         };
 
         let mut read_buffer = BytesMut::with_capacity(8192);
@@ -269,7 +261,7 @@ impl Client {
         {
             buf.clear();
             frontend::execute(&portal_name, 0, &mut buf)?;
-            frontend::close(b'P', &portal_name, &mut buf)?;
+            //frontend::close(b'P', &portal_name, &mut buf)?;
             frontend::sync(&mut buf);
             stream.write_all(&buf).await?;
         }
@@ -350,7 +342,7 @@ impl Client {
             }
         }
 
-        if prepare && self.options.prepare {
+        if prepare {
             prepared_statements.insert(
                 name.clone(),
                 PreparedStatementInfo {
