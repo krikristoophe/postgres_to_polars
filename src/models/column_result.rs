@@ -4,7 +4,7 @@ use polars::{
 };
 use postgres_protocol::message::backend::Field;
 
-use crate::utils::text_array::parse_text_array;
+use crate::{PgToPlError, PgToPlResult, utils::text_array::parse_text_array};
 
 #[derive(Debug, Clone)]
 pub struct ColumnResult<T> {
@@ -84,11 +84,17 @@ pub fn column_from_field(field: &Field) -> ColumnStorage {
     }
 }
 
-pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
+pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) -> PgToPlResult<()> {
     match column {
         ColumnStorage::Ints(col) => match value {
             Some(bytes) if bytes.len() == 4 => {
-                let val = i32::from_be_bytes(bytes.try_into().unwrap());
+                let val = i32::from_be_bytes(bytes.try_into().map_err(|e| {
+                    PgToPlError::ColumnTypeError {
+                        bytes: bytes.to_vec(),
+                        type_name: "i32".to_string(),
+                        error: e,
+                    }
+                })?);
                 col.push(val);
             }
             _ => col.push_null(),
@@ -110,7 +116,14 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         },
         ColumnStorage::Dates(col) => match value {
             Some(bytes) if bytes.len() == 4 => {
-                let pg_days = i32::from_be_bytes(bytes.try_into().unwrap()); // jours depuis 2000-01-01
+                // jours depuis 2000-01-01
+                let pg_days = i32::from_be_bytes(bytes.try_into().map_err(|e| {
+                    PgToPlError::ColumnTypeError {
+                        bytes: bytes.to_vec(),
+                        type_name: "i32".to_string(),
+                        error: e,
+                    }
+                })?);
                 let unix_days = pg_days + 10957; // => 2000-01-01 - 1970-01-01 = 10957 jours
                 col.push(unix_days);
             }
@@ -118,7 +131,7 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         },
         ColumnStorage::TextArray(col) => match value {
             Some(bytes) => {
-                let val = parse_text_array(bytes).unwrap();
+                let val = parse_text_array(bytes)?;
                 col.push(val);
             }
             _ => col.push_null(),
@@ -126,7 +139,13 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         ColumnStorage::Timestamps(col) => match value {
             Some(bytes) if bytes.len() == 8 => {
                 // PostgreSQL: microseconds since 2000-01-01
-                let pg_microseconds = i64::from_be_bytes(bytes.try_into().unwrap());
+                let pg_microseconds = i64::from_be_bytes(bytes.try_into().map_err(|e| {
+                    PgToPlError::ColumnTypeError {
+                        bytes: bytes.to_vec(),
+                        type_name: "i64".to_string(),
+                        error: e,
+                    }
+                })?);
                 let unix_microseconds = pg_microseconds + 946684800_000_000; // seconds between 1970-01-01 and 2000-01-01
                 col.push(unix_microseconds);
             }
@@ -134,14 +153,26 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         },
         ColumnStorage::Doubles(col) => match value {
             Some(bytes) if bytes.len() == 8 => {
-                let val = f64::from_be_bytes(bytes.try_into().unwrap());
+                let val = f64::from_be_bytes(bytes.try_into().map_err(|e| {
+                    PgToPlError::ColumnTypeError {
+                        bytes: bytes.to_vec(),
+                        type_name: "f64".to_string(),
+                        error: e,
+                    }
+                })?);
                 col.push(val);
             }
             _ => col.push_null(),
         },
         ColumnStorage::TimestampsWtz(col) => match value {
             Some(bytes) if bytes.len() == 8 => {
-                let micros_pg_epoch = i64::from_be_bytes(bytes.try_into().unwrap());
+                let micros_pg_epoch = i64::from_be_bytes(bytes.try_into().map_err(|e| {
+                    PgToPlError::ColumnTypeError {
+                        bytes: bytes.to_vec(),
+                        type_name: "i64".to_string(),
+                        error: e,
+                    }
+                })?);
                 let micros_unix_epoch = micros_pg_epoch + 946684800_000_000; // 2000-01-01 => 1970-01-01
                 col.push(micros_unix_epoch);
             }
@@ -149,37 +180,45 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         },
         ColumnStorage::Times(col) => match value {
             Some(bytes) if bytes.len() == 8 => {
-                let micros_since_midnight = i64::from_be_bytes(bytes.try_into().unwrap());
+                let micros_since_midnight = i64::from_be_bytes(bytes.try_into().map_err(|e| {
+                    PgToPlError::ColumnTypeError {
+                        bytes: bytes.to_vec(),
+                        type_name: "i64".to_string(),
+                        error: e,
+                    }
+                })?);
 
                 let nanos_since_midnight = micros_since_midnight * 1000;
                 col.push(nanos_since_midnight);
             }
             _ => col.push_null(),
         },
-    }
+    };
+
+    Ok(())
 }
 
-pub fn column_to_series(column: ColumnStorage) -> Series {
-    match column {
+pub fn column_to_series(column: ColumnStorage) -> PgToPlResult<Series> {
+    let res = match column {
         ColumnStorage::Ints(col) => Series::new(col.name.into(), &col.data),
         ColumnStorage::Texts(col) => Series::new(col.name.into(), &col.data),
         ColumnStorage::Bools(col) => Series::new(col.name.into(), &col.data),
         ColumnStorage::Bytes(col) => Series::new(col.name.into(), &col.data),
-        ColumnStorage::Dates(col) => Series::new(col.name.into(), &col.data)
-            .cast(&DataType::Date)
-            .unwrap(),
+        ColumnStorage::Dates(col) => {
+            Series::new(col.name.into(), &col.data).cast(&DataType::Date)?
+        }
         ColumnStorage::TextArray(col) => text_array_to_series(col.name.as_str(), col.data),
         ColumnStorage::Timestamps(col) => Series::new(col.name.into(), &col.data)
-            .cast(&DataType::Datetime(TimeUnit::Microseconds, None))
-            .unwrap(),
+            .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?,
         ColumnStorage::Doubles(col) => Series::new(col.name.into(), &col.data),
         ColumnStorage::TimestampsWtz(col) => Series::new(col.name.into(), &col.data)
-            .cast(&DataType::Datetime(TimeUnit::Microseconds, None))
-            .unwrap(),
-        ColumnStorage::Times(col) => Series::new(col.name.into(), &col.data)
-            .cast(&DataType::Time)
-            .unwrap(),
-    }
+            .cast(&DataType::Datetime(TimeUnit::Microseconds, None))?,
+        ColumnStorage::Times(col) => {
+            Series::new(col.name.into(), &col.data).cast(&DataType::Time)?
+        }
+    };
+
+    Ok(res)
 }
 
 pub fn text_array_to_series(name: &str, data: Vec<Option<Vec<Option<String>>>>) -> Series {

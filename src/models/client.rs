@@ -36,19 +36,19 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn new(options: ClientOptions) -> Self {
-        let stream = TcpStream::connect(options.connect_url()).await.unwrap();
-        Client {
+    pub async fn new(options: ClientOptions) -> PgToPlResult<Self> {
+        let stream = TcpStream::connect(options.connect_url()).await?;
+        Ok(Client {
             healthy: AtomicBool::new(false),
             options,
             stream: Arc::new(Mutex::new(stream)),
             prepared_statements: Mutex::new(HashMap::new()),
             portal_count: Mutex::new(0),
-        }
+        })
     }
 
-    pub async fn replace(&self) -> Self {
-        Client::new(self.options.clone()).await
+    pub async fn replace(&self) -> PgToPlResult<Self> {
+        Ok(Client::new(self.options.clone()).await?)
     }
 
     pub async fn connect(&self) -> PgToPlResult<()> {
@@ -219,6 +219,14 @@ impl Client {
                                 return Err(PgToPlError::QueryError(err_msg));
                             }
 
+                            prepared_statements.insert(
+                                name.clone(),
+                                PreparedStatementInfo {
+                                    param_types: param_types.clone(),
+                                    columns: clone_storages(&columns),
+                                },
+                            );
+
                             self.mark_healthy();
                             break;
                         }
@@ -267,7 +275,7 @@ impl Client {
         {
             //read_buffer.clear();
             let mut done = false;
-            let mut error_to_return: Option<String> = None;
+            let mut error_to_return: Option<PgToPlError> = None;
 
             while !done {
                 let n = {
@@ -295,32 +303,43 @@ impl Client {
                             for (i, col) in columns.iter_mut().enumerate() {
                                 let next = ranges.next()?; // Result<Option<Option<Range>>>
                                 match next {
-                                    Some(Some(r)) => push_column_value(col, Some(&buf[r])),
-                                    Some(None) => push_column_value(col, None),
+                                    Some(Some(r)) => {
+                                        let res = push_column_value(col, Some(&buf[r]));
+
+                                        if let Err(e) = res {
+                                            error_to_return = Some(e);
+                                        }
+                                    }
+                                    Some(None) => {
+                                        let res = push_column_value(col, None);
+                                        if let Err(e) = res {
+                                            error_to_return = Some(e);
+                                        }
+                                    }
                                     None => {
-                                        prepared_statements.remove(&name);
                                         // trop peu de champs côté serveur
-                                        error_to_return = Some(format!(
+                                        error_to_return = Some(PgToPlError::QueryError(format!(
                                             "Too few fields: expected {}, got {}",
                                             columns.len(),
                                             i
-                                        ));
+                                        )));
                                         break;
                                     }
                                 }
                             }
                             // champs en trop ?
                             if error_to_return.is_none() && ranges.next()?.is_some() {
-                                prepared_statements.remove(&name);
-                                error_to_return =
-                                    Some(format!("Too many fields: expected {}", columns.len()));
+                                error_to_return = Some(PgToPlError::QueryError(format!(
+                                    "Too many fields: expected {}",
+                                    columns.len()
+                                )));
                             }
                         }
                         backend::Message::ReadyForQuery(_) => {
                             done = true;
-                            if let Some(err_msg) = error_to_return {
+                            if let Some(err) = error_to_return {
                                 self.mark_unhealthy();
-                                return Err(PgToPlError::QueryError(err_msg));
+                                return Err(err);
                             }
 
                             self.mark_healthy();
@@ -330,7 +349,7 @@ impl Client {
                             let error_msg = error_to_string(&error);
 
                             if error_to_return.is_none() {
-                                error_to_return = Some(error_msg);
+                                error_to_return = Some(PgToPlError::QueryError(error_msg));
                             }
                         }
                         _ => {}
@@ -339,22 +358,15 @@ impl Client {
             }
         }
 
-        if prepare {
-            prepared_statements.insert(
-                name.clone(),
-                PreparedStatementInfo {
-                    param_types: param_types.clone(),
-                    columns: clone_storages(&columns),
-                },
-            );
-        }
-
         drop(stream);
         drop(prepared_statements);
 
-        Ok(DataFrame::from_iter(
-            columns.into_iter().map(|col| column_to_series(col)),
-        ))
+        let series = columns
+            .into_iter()
+            .map(|col| column_to_series(col))
+            .collect::<PgToPlResult<Vec<_>>>()?;
+
+        Ok(DataFrame::from_iter(series))
     }
 
     pub fn has_broken(&self) -> bool {

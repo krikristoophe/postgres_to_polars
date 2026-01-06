@@ -14,7 +14,7 @@ impl ManageConnection for ClientManager {
     type Error = PgToPlError;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        let client = Client::new(self.options.clone()).await;
+        let client = Client::new(self.options.clone()).await?;
         client.connect().await?;
         Ok(client)
     }

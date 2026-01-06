@@ -30,7 +30,7 @@ mod tests {
         let options = create_test_client_option();
 
         // Création et connexion du client
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Exécution de la requête
@@ -53,7 +53,7 @@ mod tests {
         let options = create_test_client_option();
 
         // Création et connexion du client
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Exécution de la requête
@@ -74,7 +74,7 @@ mod tests {
     async fn test_query_with_params() {
         let options = create_test_client_option();
 
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Requête avec paramètre
@@ -99,7 +99,7 @@ mod tests {
     async fn test_prepared_statement_cache() {
         let options = create_test_client_option();
 
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         let query = "SELECT * FROM users WHERE id = $1";
@@ -120,7 +120,7 @@ mod tests {
     async fn test_error_handling() {
         let options = create_test_client_option();
 
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Requête invalide (table inexistante)
@@ -140,7 +140,7 @@ mod tests {
     async fn test_error_handling_retry() {
         let options = create_test_client_option();
 
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Requête invalide (table inexistante)
@@ -159,7 +159,7 @@ mod tests {
     async fn test_error_handling_retry_loop() {
         let options = create_test_client_option();
 
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         for _ in 0..100 {
@@ -236,7 +236,7 @@ mod tests {
         let options = create_test_client_option();
 
         // Création et connexion du client
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Exécution de la requête
@@ -267,7 +267,7 @@ mod tests {
         let options = create_test_client_option();
 
         // Création et connexion du client
-        let client = Client::new(options).await;
+        let client = Client::new(options).await.expect("Failed to create client");
         client.connect().await.expect("Failed to connect");
 
         // Exécution de la requête

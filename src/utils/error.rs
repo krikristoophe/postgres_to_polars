@@ -1,3 +1,5 @@
+use std::array::TryFromSliceError;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -26,6 +28,14 @@ pub enum PgToPlError {
     QueryError(String),
     #[error("Connection broken")]
     ConnectionBroken,
+    #[error("Polars error: {0}")]
+    PolarsError(#[from] polars::error::PolarsError),
+    #[error("Column type error: {type_name}<{bytes:?}> {error}")]
+    ColumnTypeError {
+        bytes: Vec<u8>,
+        type_name: String,
+        error: TryFromSliceError,
+    },
 }
 
 pub type PgToPlResult<T> = Result<T, PgToPlError>;
