@@ -95,7 +95,7 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) {
         },
         ColumnStorage::Texts(col) => match value {
             Some(bytes) => {
-                let val = std::str::from_utf8(bytes).unwrap().to_string();
+                let val = String::from_utf8_lossy(bytes).to_string();
                 col.push(val);
             }
             _ => col.push_null(),

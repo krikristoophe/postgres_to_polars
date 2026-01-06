@@ -1,5 +1,4 @@
 use byteorder::{BigEndian, ReadBytesExt};
-use std::io;
 
 use crate::{PgToPlError, utils::error::PgToPlResult};
 
@@ -31,9 +30,8 @@ pub fn parse_text_array(mut bytes: &[u8]) -> PgToPlResult<Vec<Option<String>>> {
             }
             let (str_bytes, rest) = bytes.split_at(item_len);
             bytes = rest;
-            let s = std::str::from_utf8(str_bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            values.push(Some(s.to_string()));
+            let s = String::from_utf8_lossy(str_bytes).to_string();
+            values.push(Some(s));
         }
     }
 
