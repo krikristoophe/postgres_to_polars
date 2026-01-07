@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::client_options::ClientOptions;
@@ -19,7 +19,7 @@ use postgres_protocol::message::backend;
 use postgres_protocol::message::frontend;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone)]
 struct PreparedStatementInfo {
@@ -30,7 +30,7 @@ struct PreparedStatementInfo {
 pub struct Client {
     healthy: AtomicBool,
     options: ClientOptions,
-    stream: Arc<Mutex<TcpStream>>,
+    stream: Mutex<TcpStream>,
     prepared_statements: Mutex<HashMap<String, PreparedStatementInfo>>,
     portal_count: Mutex<i32>,
 }
@@ -41,7 +41,7 @@ impl Client {
         Ok(Client {
             healthy: AtomicBool::new(false),
             options,
-            stream: Arc::new(Mutex::new(stream)),
+            stream: Mutex::new(stream),
             prepared_statements: Mutex::new(HashMap::new()),
             portal_count: Mutex::new(0),
         })
@@ -85,6 +85,7 @@ impl Client {
             };
 
             if n == 0 {
+                self.mark_unhealthy();
                 return Err(PgToPlError::ConnectionClosed);
             }
 
@@ -103,6 +104,7 @@ impl Client {
                         break;
                     }
                     backend::Message::ErrorResponse(error) => {
+                        self.mark_unhealthy();
                         let error_msg = error_to_string(&error);
 
                         print_error(&error);
@@ -144,6 +146,30 @@ impl Client {
     where
         P: IntoIterator<Item = Option<BinaryParam>>,
     {
+        let mut stream = self.stream.lock().await;
+        let res = self._query(query, params, &mut stream).await;
+
+        if res.is_err() {
+            self.mark_unhealthy();
+        }
+
+        res
+    }
+
+    pub async fn _query<P>(
+        &self,
+        query: &str,
+        params: P,
+        stream: &mut MutexGuard<'_, TcpStream>,
+    ) -> PgToPlResult<DataFrame>
+    where
+        P: IntoIterator<Item = Option<BinaryParam>>,
+    {
+        if self.has_broken() {
+            self.mark_unhealthy();
+            return Err(PgToPlError::ConnectionBroken);
+        }
+
         let portal_count = {
             let mut count = self.portal_count.lock().await;
             *count += 1;
@@ -157,7 +183,6 @@ impl Client {
 
         let name = statement_name(query);
         let mut prepared_statements = self.prepared_statements.lock().await;
-        let mut stream = self.stream.lock().await;
 
         let (prepare, mut columns) = match prepared_statements.get(&name) {
             Some(info) => {
@@ -307,16 +332,19 @@ impl Client {
                                         let res = push_column_value(col, Some(&buf[r]));
 
                                         if let Err(e) = res {
+                                            self.mark_unhealthy();
                                             error_to_return = Some(e);
                                         }
                                     }
                                     Some(None) => {
                                         let res = push_column_value(col, None);
                                         if let Err(e) = res {
+                                            self.mark_unhealthy();
                                             error_to_return = Some(e);
                                         }
                                     }
                                     None => {
+                                        self.mark_unhealthy();
                                         // trop peu de champs côté serveur
                                         error_to_return = Some(PgToPlError::QueryError(format!(
                                             "Too few fields: expected {}, got {}",
@@ -329,6 +357,7 @@ impl Client {
                             }
                             // champs en trop ?
                             if error_to_return.is_none() && ranges.next()?.is_some() {
+                                self.mark_unhealthy();
                                 error_to_return = Some(PgToPlError::QueryError(format!(
                                     "Too many fields: expected {}",
                                     columns.len()
@@ -346,6 +375,7 @@ impl Client {
                             break;
                         }
                         backend::Message::ErrorResponse(error) => {
+                            self.mark_unhealthy();
                             let error_msg = error_to_string(&error);
 
                             if error_to_return.is_none() {
@@ -358,7 +388,6 @@ impl Client {
             }
         }
 
-        drop(stream);
         drop(prepared_statements);
 
         let series = columns
@@ -381,6 +410,10 @@ impl Client {
     }
 
     pub async fn ping(&self) -> PgToPlResult<()> {
+        if self.has_broken() {
+            return Err(PgToPlError::ConnectionBroken);
+        }
+
         let mut stream = self.stream.lock().await;
         let mut buf = BytesMut::new();
         frontend::query("/* ping */ SELECT 1", &mut buf)?;
@@ -400,6 +433,7 @@ impl Client {
                 read_buffer.advance_mut(n);
             }
             if n == 0 {
+                self.mark_unhealthy();
                 return Err(PgToPlError::ConnectionClosed);
             }
 
@@ -415,6 +449,7 @@ impl Client {
                         return Ok(());
                     }
                     backend::Message::ErrorResponse(error) => {
+                        self.mark_unhealthy();
                         let error_msg = error_to_string(&error);
 
                         if error_to_return.is_none() {

@@ -23,7 +23,8 @@ impl ManageConnection for ClientManager {
         if conn.has_broken() {
             return Err(PgToPlError::ConnectionBroken);
         }
-        conn.ping().await
+        conn.ping().await?;
+        Ok(())
     }
 
     fn has_broken(&self, conn: &mut Self::Connection) -> bool {
@@ -40,6 +41,7 @@ pub async fn build_pool(opts: PoolOptions) -> PgToPlResult<Pool<ClientManager>> 
         .connection_timeout(Duration::from_secs(opts.acquire_timeout))
         .idle_timeout(Some(Duration::from_secs(60)))
         .max_lifetime(Some(Duration::from_secs(30 * 60)))
+        .queue_strategy(bb8::QueueStrategy::Lifo)
         .test_on_check_out(true)
         .build(mgr)
         .await?;

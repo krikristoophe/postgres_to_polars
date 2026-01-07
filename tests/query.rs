@@ -137,46 +137,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_error_handling_retry() {
-        let options = create_test_client_option();
-
-        let client = Client::new(options).await.expect("Failed to create client");
-        client.connect().await.expect("Failed to connect");
-
-        // Requête invalide (table inexistante)
-        let result = client
-            .query("SELECT * FROM table_qui_nexiste_pas", vec![])
-            .await;
-
-        assert!(result.is_err());
-
-        let result = client.query("SELECT * FROM users limit 10;", vec![]).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_error_handling_retry_loop() {
-        let options = create_test_client_option();
-
-        let client = Client::new(options).await.expect("Failed to create client");
-        client.connect().await.expect("Failed to connect");
-
-        for _ in 0..100 {
-            // Requête invalide (table inexistante)
-            let result = client
-                .query("SELECT * FROM table_qui_nexiste_pas", vec![])
-                .await;
-
-            assert!(result.is_err());
-
-            let result = client.query("SELECT * FROM users limit 10;", vec![]).await;
-
-            assert!(result.is_ok());
-        }
-    }
-
-    #[tokio::test]
     async fn test_pool_error_handling_retry_loop() {
         let client_options = create_test_client_option();
 
@@ -192,9 +152,7 @@ mod tests {
 
             assert!(result.is_err());
 
-            let result = client.query("SELECT * FROM users limit 10;", vec![]).await;
-
-            assert!(result.is_ok());
+            assert!(client.has_broken());
         }
     }
 
@@ -219,8 +177,7 @@ mod tests {
                     .await;
                 assert!(result.is_err(), "Iteration {}: Expected error", i);
 
-                let result = client.query("SELECT * FROM users limit 10;", vec![]).await;
-                assert!(result.is_ok(), "Iteration {}: Expected success", i);
+                assert!(client.has_broken());
             });
         }
 
