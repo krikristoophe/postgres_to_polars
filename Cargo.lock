@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "postgres_to_polars"
-version = "0.5.12"
+version = "0.5.13"
 dependencies = [
  "bb8",
  "byteorder",

@@ -3,6 +3,7 @@ use polars::{
     series::{IntoSeries, Series},
 };
 use postgres_protocol::message::backend::Field;
+use tracing::warn;
 
 use crate::{PgToPlError, PgToPlResult, utils::text_array::parse_text_array};
 
@@ -73,7 +74,7 @@ pub fn column_from_field(field: &Field) -> ColumnStorage {
         1114 => ColumnStorage::TimestampsWtz(ColumnResult::new(name)), // timestamp
         1083 => ColumnStorage::Times(ColumnResult::new(name)), // time
         _ => {
-            println!(
+            warn!(
                 "⚠️ Unknown type column: name={}, type_oid={}, format={}",
                 field.name(),
                 field.type_oid(),

@@ -23,9 +23,5 @@ pub fn statement_name(query: &str) -> String {
     let digest = md5::compute(query.as_bytes());
     let res = format!("stmt_{:x}", digest); // Toujours 32 caractères
 
-    if res == "stmt_572700fa61c4a2d336710b3bd7af5a8e" {
-        println!("DUPLICATE STATEMENT QUERY : {:?}", query);
-    }
-
     res
 }

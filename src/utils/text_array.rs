@@ -1,4 +1,5 @@
 use byteorder::{BigEndian, ReadBytesExt};
+use tracing::error;
 
 use crate::{PgToPlError, utils::error::PgToPlResult};
 
@@ -7,7 +8,7 @@ pub fn parse_text_array(mut bytes: &[u8]) -> PgToPlResult<Vec<Option<String>>> {
     if ndim == 0 {
         return Ok(Vec::new()); // tableau vide
     } else if ndim != 1 {
-        println!("ndim {}", ndim);
+        error!("ndim {}", ndim);
         return Err(PgToPlError::OnlyOneDimensionArraySupported);
     }
 
