@@ -1,7 +1,7 @@
 [package]
 name = "postgres_to_polars"
 description = "A Rust library for direct and performant conversion of PostgreSQL data to Polars dataframes."
-version = "0.5.11"
+version = "0.5.12"
 edition = "2024"
 authors = ["Christophe Sonneville <christophe@swappy.fr>"]
 readme = "README.md"
@@ -19,8 +19,11 @@ bytes = "1.10.1"
 fallible-iterator = "0.2.0"
 md5 = "0.8.0"
 nanoid = "0.4.0"
+once_cell = "1.21.3"
 polars = {version = "0.52.0", default-features = false, features = ["dtype-datetime"]}
 postgres-protocol = "0.6.9"
 slice = "0.0.4"
 thiserror = "2.0.17"
 tokio = { version = "1.47.1", features = ["full", "net"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

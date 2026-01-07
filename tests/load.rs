@@ -1,8 +1,9 @@
 use polars::prelude::PlSmallStr;
-use postgres_to_polars::{BinaryParam, ClientOptions, PoolOptions, build_pool};
+use postgres_to_polars::{BinaryParam, ClientOptions, PoolOptions, build_pool, init_logger};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::time::{Duration, Instant, sleep};
+use tracing::info;
 
 const USERNAME: &str = "POSTGRES_USER";
 const PASSWORD: &str = "pgpassword";
@@ -16,17 +17,15 @@ fn create_test_client_option() -> ClientOptions {
         String::from("127.0.0.1"),
         5432,
     )
+    .with_monkey_chaos_already_prepare()
 }
 
 #[tokio::test]
 async fn load_test_simple() {
-    let pool = build_pool(PoolOptions {
-        client_options: create_test_client_option(),
-        max_connections: 10,
-        acquire_timeout: 5,
-    })
-    .await
-    .unwrap();
+    init_logger();
+    let pool = build_pool(PoolOptions::new(create_test_client_option(), 10, 5))
+        .await
+        .unwrap();
 
     let num_tasks = 100;
     let num_queries_per_task = 50;
@@ -93,10 +92,10 @@ async fn load_test_simple() {
     let successes = success_count.load(Ordering::Relaxed);
     let errors = error_count.load(Ordering::Relaxed);
 
-    println!("✅ Durée: {:?}", duration);
-    println!("✅ Succès: {} / {}", successes, total_queries);
-    println!("❌ Erreurs: {}", errors);
-    println!(
+    info!("✅ Durée: {:?}", duration);
+    info!("✅ Succès: {} / {}", successes, total_queries);
+    info!("❌ Erreurs: {}", errors);
+    info!(
         "📊 QPS: {:.2}",
         total_queries as f64 / duration.as_secs_f64()
     );
@@ -106,13 +105,10 @@ async fn load_test_simple() {
 
 #[tokio::test]
 async fn load_test_mixed_queries() {
-    let pool = build_pool(PoolOptions {
-        client_options: create_test_client_option(),
-        max_connections: 10,
-        acquire_timeout: 5,
-    })
-    .await
-    .unwrap();
+    init_logger();
+    let pool = build_pool(PoolOptions::new(create_test_client_option(), 10, 5))
+        .await
+        .unwrap();
 
     let queries = vec![
         "SELECT $1::int",
@@ -202,9 +198,9 @@ async fn load_test_mixed_queries() {
     let total = success.load(Ordering::Relaxed);
     let errs = errors.load(Ordering::Relaxed);
 
-    println!("✅ Total réussi: {}", total);
-    println!("❌ Total erreurs: {}", errs);
-    println!(
+    info!("✅ Total réussi: {}", total);
+    info!("❌ Total erreurs: {}", errs);
+    info!(
         "📊 Taux d'erreur: {:.2}%",
         (errs as f64 / (total + errs) as f64) * 100.0
     );

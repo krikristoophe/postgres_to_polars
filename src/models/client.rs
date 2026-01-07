@@ -9,8 +9,8 @@ use crate::models::column_result::{
     ColumnStorage, clone_storages, column_from_field, column_to_series, push_column_value,
 };
 use crate::models::params::format_params;
-use crate::utils::error::PgToPlResult;
-use crate::utils::{error_to_string, md5_hash, print_error, statement_name};
+use crate::utils::error::{PgToPlResult, message_name};
+use crate::utils::{md5_hash, statement_name};
 use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use polars::prelude::*;
@@ -20,6 +20,9 @@ use postgres_protocol::message::frontend;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, MutexGuard};
+use tracing::{debug, warn};
+
+type StreamType<'a> = MutexGuard<'a, TcpStream>;
 
 #[derive(Debug, Clone)]
 struct PreparedStatementInfo {
@@ -33,12 +36,14 @@ pub struct Client {
     stream: Mutex<TcpStream>,
     prepared_statements: Mutex<HashMap<String, PreparedStatementInfo>>,
     portal_count: Mutex<i32>,
+    monkey_chaos_already_prepare: bool,
 }
 
 impl Client {
     pub async fn new(options: ClientOptions) -> PgToPlResult<Self> {
         let stream = TcpStream::connect(options.connect_url()).await?;
         Ok(Client {
+            monkey_chaos_already_prepare: options.monkey_chaos_already_prepare,
             healthy: AtomicBool::new(false),
             options,
             stream: Mutex::new(stream),
@@ -47,8 +52,9 @@ impl Client {
         })
     }
 
-    pub async fn replace(&self) -> PgToPlResult<Self> {
-        Ok(Client::new(self.options.clone()).await?)
+    pub fn with_monkey_chaos_already_prepare(mut self) -> Self {
+        self.monkey_chaos_already_prepare = true;
+        self
     }
 
     pub async fn connect(&self) -> PgToPlResult<()> {
@@ -68,7 +74,7 @@ impl Client {
 
         let mut read_buffer = BytesMut::with_capacity(8192);
 
-        let mut error_to_return: Option<String> = None;
+        let mut error_to_return: Option<PgToPlError> = None;
 
         loop {
             read_buffer.reserve(8192);
@@ -97,7 +103,7 @@ impl Client {
                         ready = true;
                         if let Some(err_msg) = error_to_return {
                             self.mark_unhealthy();
-                            return Err(PgToPlError::QueryError(err_msg));
+                            return Err(err_msg);
                         }
 
                         self.mark_healthy();
@@ -105,16 +111,13 @@ impl Client {
                     }
                     backend::Message::ErrorResponse(error) => {
                         self.mark_unhealthy();
-                        let error_msg = error_to_string(&error);
-
-                        print_error(&error);
 
                         if error_to_return.is_none() {
-                            error_to_return = Some(error_msg);
+                            error_to_return = Some(error.into());
                         }
                     }
                     backend::Message::AuthenticationCleartextPassword => {
-                        println!("Authentication: Cleartext password requested");
+                        warn!("Authentication: Cleartext password requested");
                     }
                     backend::Message::AuthenticationMd5Password(salt) => {
                         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
@@ -129,7 +132,27 @@ impl Client {
                         )?;
                         stream.write_all(&buf).await?;
                     }
-                    _ => {}
+                    //
+                    backend::Message::ParameterStatus(body) => {
+                        // ✅ Normal : le serveur nous envoie les paramètres de session
+                        let name = match body.name() {
+                            Ok(name) => name,
+                            Err(_) => "fail to parse parameter name",
+                        };
+                        let value = match body.value() {
+                            Ok(value) => value,
+                            Err(_) => "fail to parse parameter value",
+                        };
+
+                        debug!("Parameter status: {} = {}", name, value);
+                    }
+                    backend::Message::AuthenticationOk | backend::Message::BackendKeyData(_) => {
+                        // Skip
+                    }
+                    //
+                    other => {
+                        warn!("Unhandled message: {:?}", message_name(other));
+                    }
                 }
             }
             if ready {
@@ -160,7 +183,7 @@ impl Client {
         &self,
         query: &str,
         params: P,
-        stream: &mut MutexGuard<'_, TcpStream>,
+        stream: &mut StreamType<'_>,
     ) -> PgToPlResult<DataFrame>
     where
         P: IntoIterator<Item = Option<BinaryParam>>,
@@ -175,9 +198,8 @@ impl Client {
             *count += 1;
             *count
         };
-        let portal_name = format!("portal_{}", portal_count);
 
-        let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
+        let portal_name = format!("portal_{}", portal_count);
 
         let (param_types, param_values) = format_params(params);
 
@@ -189,88 +211,33 @@ impl Client {
                 if info.param_types != param_types {
                     return Err(PgToPlError::ParamTypeMismatch);
                 }
-                (false, info.columns.clone())
+                if self.monkey_chaos_already_prepare {
+                    debug!("Monkey chaos already prepare");
+                    (true, Vec::new())
+                } else {
+                    (false, info.columns.clone())
+                }
             }
             None => (true, Vec::new()),
         };
 
-        let mut read_buffer = BytesMut::with_capacity(8192);
-
         // Step 1 : Prepare the statement if not already prepared
         if prepare {
-            frontend::parse(&name, query, param_types.iter().copied(), &mut buf)?;
-            frontend::describe(b'S', &name, &mut buf)?;
-            frontend::sync(&mut buf);
-            stream.write_all(&buf).await?;
-
-            let mut done = false;
-
-            let mut error_to_return: Option<String> = None;
-
-            while !done {
-                let n = {
-                    read_buffer.reserve(8192);
-                    let dst = read_buffer.chunk_mut();
-                    let buf: &mut [u8] =
-                        unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
-                    let n = stream.read(buf).await?;
-                    unsafe {
-                        read_buffer.advance_mut(n);
-                    }
-                    n
-                };
-
-                if n == 0 {
-                    self.mark_unhealthy();
-                    return Err(PgToPlError::ConnectionClosed);
-                }
-
-                while let Some(message) = backend::Message::parse(&mut read_buffer)? {
-                    match message {
-                        backend::Message::RowDescription(desc) => {
-                            columns.clear();
-                            let fields = desc.fields().iterator();
-                            for field in fields {
-                                let f = field?;
-
-                                columns.push(column_from_field(&f))
-                            }
-                        }
-
-                        backend::Message::ReadyForQuery(_) => {
-                            done = true;
-                            if let Some(err_msg) = error_to_return {
-                                self.mark_unhealthy();
-                                return Err(PgToPlError::QueryError(err_msg));
-                            }
-
-                            prepared_statements.insert(
-                                name.clone(),
-                                PreparedStatementInfo {
-                                    param_types: param_types.clone(),
-                                    columns: clone_storages(&columns),
-                                },
-                            );
-
-                            self.mark_healthy();
-                            break;
-                        }
-                        backend::Message::ErrorResponse(error) => {
-                            let error_msg = error_to_string(&error);
-
-                            if error_to_return.is_none() {
-                                error_to_return = Some(error_msg);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            columns = self
+                .prepare_query(&name, query, &param_types, stream)
+                .await?;
+            prepared_statements.insert(
+                name.clone(),
+                PreparedStatementInfo {
+                    param_types: param_types.clone(),
+                    columns: clone_storages(&columns),
+                },
+            );
         }
 
         // Step 2 : Bind prepared statement to portal
         {
-            buf.clear();
+            let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>
             frontend::bind(
                 &portal_name,
                 &name,
@@ -287,10 +254,9 @@ impl Client {
                 &mut buf,
             )
             .map_err(|_| PgToPlError::BindError)?;
-        }
 
-        // Step 3 : Execute
-        {
+            // Step 3 : Execute
+
             frontend::execute(&portal_name, 0, &mut buf)?;
             frontend::sync(&mut buf);
             stream.write_all(&buf).await?;
@@ -298,7 +264,7 @@ impl Client {
 
         // Step 4 : read response
         {
-            //read_buffer.clear();
+            let mut read_buffer = BytesMut::with_capacity(8192);
             let mut done = false;
             let mut error_to_return: Option<PgToPlError> = None;
 
@@ -346,11 +312,8 @@ impl Client {
                                     None => {
                                         self.mark_unhealthy();
                                         // trop peu de champs côté serveur
-                                        error_to_return = Some(PgToPlError::QueryError(format!(
-                                            "Too few fields: expected {}, got {}",
-                                            columns.len(),
-                                            i
-                                        )));
+                                        error_to_return =
+                                            Some(PgToPlError::TooFewField(columns.len(), i));
                                         break;
                                     }
                                 }
@@ -358,10 +321,7 @@ impl Client {
                             // champs en trop ?
                             if error_to_return.is_none() && ranges.next()?.is_some() {
                                 self.mark_unhealthy();
-                                error_to_return = Some(PgToPlError::QueryError(format!(
-                                    "Too many fields: expected {}",
-                                    columns.len()
-                                )));
+                                error_to_return = Some(PgToPlError::TooManyField(columns.len()));
                             }
                         }
                         backend::Message::ReadyForQuery(_) => {
@@ -376,13 +336,28 @@ impl Client {
                         }
                         backend::Message::ErrorResponse(error) => {
                             self.mark_unhealthy();
-                            let error_msg = error_to_string(&error);
 
                             if error_to_return.is_none() {
-                                error_to_return = Some(PgToPlError::QueryError(error_msg));
+                                error_to_return = Some(error.into());
                             }
                         }
-                        _ => {}
+                        //
+                        backend::Message::CommandComplete(body) => match body.tag() {
+                            Ok(tag) => {
+                                debug!("Command completed: {}", tag);
+                            }
+                            Err(err) => {
+                                warn!("Error parsing command tag: {}", err);
+                            }
+                        },
+                        backend::Message::BindComplete => {}
+                        backend::Message::EmptyQueryResponse => {
+                            debug!("Empty query response");
+                        }
+                        //
+                        other => {
+                            warn!("Unhandled message: {:?}", message_name(other));
+                        }
                     }
                 }
             }
@@ -421,7 +396,7 @@ impl Client {
 
         // Lire jusqu'à ReadyForQuery (drain complet)
         let mut read_buffer = BytesMut::with_capacity(4096);
-        let mut error_to_return: Option<String> = None;
+        let mut error_to_return: Option<PgToPlError> = None;
 
         loop {
             read_buffer.reserve(4096);
@@ -442,7 +417,7 @@ impl Client {
                     backend::Message::ReadyForQuery(_) => {
                         if let Some(err_msg) = error_to_return {
                             self.mark_unhealthy();
-                            return Err(PgToPlError::QueryError(err_msg));
+                            return Err(err_msg);
                         }
 
                         self.mark_healthy();
@@ -450,13 +425,200 @@ impl Client {
                     }
                     backend::Message::ErrorResponse(error) => {
                         self.mark_unhealthy();
-                        let error_msg = error_to_string(&error);
 
                         if error_to_return.is_none() {
-                            error_to_return = Some(error_msg);
+                            error_to_return = Some(error.into());
                         }
                     }
-                    _ => {}
+                    backend::Message::CommandComplete(body) => match body.tag() {
+                        Ok(tag) => {
+                            debug!("Command completed: {}", tag);
+                        }
+                        Err(err) => {
+                            warn!("Error parsing command tag: {}", err);
+                        }
+                    },
+                    backend::Message::RowDescription(_) | backend::Message::DataRow(_) => {
+                        // Skip
+                    }
+
+                    other => {
+                        warn!("Unhandled message: {:?}", message_name(other));
+                    }
+                }
+            }
+        }
+    }
+
+    async fn prepare_query(
+        &self,
+        name: &str,
+        query: &str,
+        param_types: &Vec<u32>,
+        stream: &mut StreamType<'_>,
+    ) -> PgToPlResult<Vec<ColumnStorage>> {
+        let res = self._prepare_query(name, query, param_types, stream).await;
+        if let Ok(columns) = res {
+            Ok(columns)
+        } else {
+            self.close_statement(name, stream).await?;
+            // discard + reprepare
+            self._prepare_query(name, query, param_types, stream).await
+        }
+    }
+
+    async fn _prepare_query(
+        &self,
+        name: &str,
+        query: &str,
+        param_types: &Vec<u32>,
+        stream: &mut StreamType<'_>,
+    ) -> PgToPlResult<Vec<ColumnStorage>> {
+        let mut buf = BytesMut::new();
+        let mut read_buffer = BytesMut::with_capacity(4096);
+        frontend::parse(&name, query, param_types.iter().copied(), &mut buf)?;
+        frontend::describe(b'S', &name, &mut buf)?;
+        frontend::sync(&mut buf);
+        stream.write_all(&buf).await?;
+
+        let mut done = false;
+
+        let mut error_to_return: Option<PgToPlError> = None;
+
+        let mut columns = vec![];
+
+        while !done {
+            let n = {
+                read_buffer.reserve(8192);
+                let dst = read_buffer.chunk_mut();
+                let buf: &mut [u8] =
+                    unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
+                let n = stream.read(buf).await?;
+                unsafe {
+                    read_buffer.advance_mut(n);
+                }
+                n
+            };
+
+            if n == 0 {
+                self.mark_unhealthy();
+                return Err(PgToPlError::ConnectionClosed);
+            }
+
+            while let Some(message) = backend::Message::parse(&mut read_buffer)? {
+                match message {
+                    backend::Message::RowDescription(desc) => {
+                        columns.clear();
+                        let fields = desc.fields().iterator();
+                        for field in fields {
+                            let f = field?;
+
+                            columns.push(column_from_field(&f))
+                        }
+                    }
+
+                    backend::Message::ReadyForQuery(_) => {
+                        done = true;
+                        if let Some(err) = error_to_return {
+                            self.mark_unhealthy();
+                            return Err(err);
+                        }
+
+                        self.mark_healthy();
+                        break;
+                    }
+                    backend::Message::ErrorResponse(error) => {
+                        if error_to_return.is_none() {
+                            error_to_return = Some(error.into());
+                        }
+                    }
+                    backend::Message::ParameterDescription(body) => {
+                        let parameters = body.parameters().iterator();
+                        let mut index = 0;
+                        for parameter in parameters {
+                            if let Ok(parameter) = parameter {
+                                if parameter != param_types[index] {
+                                    warn!(
+                                        "Parameter type mismatch for stmt '{}': Provided {}, expected {}",
+                                        name, parameter, param_types[index]
+                                    );
+                                }
+                            } else {
+                                warn!("Failed to parse parameter description for stmt '{}'", name);
+                            }
+                            index += 1;
+                        }
+                        if index != param_types.len() {
+                            warn!(
+                                "Parameter description mismatch for stmt '{}': Provided {}, expected {}",
+                                name,
+                                param_types.len(),
+                                index,
+                            );
+                        }
+                    }
+                    //
+                    backend::Message::ParseComplete => {
+                        // ✅ C'est normal, le Parse a réussi
+                        debug!("Statement '{}' parsed successfully", name);
+                    }
+
+                    //
+                    other => {
+                        warn!("Unhandled message: {:?}", message_name(other));
+                    }
+                }
+            }
+        }
+
+        Ok(columns)
+    }
+
+    pub async fn close_statement(
+        &self,
+        name: &str,
+        stream: &mut StreamType<'_>,
+    ) -> PgToPlResult<()> {
+        let mut buf = BytesMut::new();
+
+        // Close message : type 'S' pour Statement (ou 'P' pour Portal)
+        frontend::close(b'S', name, &mut buf)?;
+        frontend::sync(&mut buf);
+
+        stream.write_all(&buf).await?;
+
+        // Lire la réponse jusqu'à ReadyForQuery
+        let mut read_buffer = BytesMut::with_capacity(4096);
+
+        loop {
+            let n = {
+                read_buffer.reserve(4096);
+                let dst = read_buffer.chunk_mut();
+                let buf: &mut [u8] =
+                    unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len()) };
+                let n = stream.read(buf).await?;
+                unsafe {
+                    read_buffer.advance_mut(n);
+                }
+                n
+            };
+
+            if n == 0 {
+                return Err(PgToPlError::ConnectionClosed);
+            }
+
+            while let Some(msg) = backend::Message::parse(&mut read_buffer)? {
+                match msg {
+                    backend::Message::CloseComplete => {}
+                    backend::Message::ReadyForQuery(_) => {
+                        return Ok(());
+                    }
+                    backend::Message::ErrorResponse(error) => {
+                        return Err(error.into());
+                    }
+                    other => {
+                        warn!("Unhandled message: {:?}", message_name(other));
+                    }
                 }
             }
         }

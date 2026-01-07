@@ -1,7 +1,5 @@
-use fallible_iterator::FallibleIterator;
-use postgres_protocol::message::backend::ErrorResponseBody;
-
 pub mod error;
+pub mod logger;
 pub mod text_array;
 
 pub fn md5_hash(user: &str, password: &str, salt: &[u8; 4]) -> String {
@@ -23,29 +21,11 @@ pub fn md5_hash(user: &str, password: &str, salt: &[u8; 4]) -> String {
 
 pub fn statement_name(query: &str) -> String {
     let digest = md5::compute(query.as_bytes());
-    format!("stmt_{:x}", digest) // Toujours 32 caractères
-}
+    let res = format!("stmt_{:x}", digest); // Toujours 32 caractères
 
-pub fn print_error(err: &ErrorResponseBody) {
-    println!("Received error: {:?}", error_to_string(err));
-}
-
-pub fn error_to_string(err: &ErrorResponseBody) -> String {
-    let fields = err.fields().iterator();
-    let mut error_strings = Vec::with_capacity(5);
-    for field in fields {
-        match field {
-            Ok(f) => {
-                let bytes = f.value_bytes();
-                let value = String::from_utf8_lossy(&bytes);
-
-                error_strings.push(value.to_string());
-            }
-            Err(err) => {
-                error_strings.push(format!("Error parsing error field: {:?}", err));
-                break;
-            }
-        }
+    if res == "stmt_572700fa61c4a2d336710b3bd7af5a8e" {
+        println!("DUPLICATE STATEMENT QUERY : {:?}", query);
     }
-    error_strings.join("\n").to_string()
+
+    res
 }

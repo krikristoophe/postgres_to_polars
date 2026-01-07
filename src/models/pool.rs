@@ -15,6 +15,7 @@ impl ManageConnection for ClientManager {
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
         let client = Client::new(self.options.clone()).await?;
+
         client.connect().await?;
         Ok(client)
     }

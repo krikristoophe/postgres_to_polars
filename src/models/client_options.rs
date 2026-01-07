@@ -5,6 +5,7 @@ pub struct ClientOptions {
     pub database: String,
     pub host: String,
     pub port: u16,
+    pub monkey_chaos_already_prepare: bool,
 }
 
 impl ClientOptions {
@@ -15,7 +16,13 @@ impl ClientOptions {
             database,
             host,
             port,
+            monkey_chaos_already_prepare: false,
         }
+    }
+
+    pub fn with_monkey_chaos_already_prepare(mut self) -> Self {
+        self.monkey_chaos_already_prepare = true;
+        self
     }
 
     pub fn connect_url(&self) -> String {

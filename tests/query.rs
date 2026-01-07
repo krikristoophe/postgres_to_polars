@@ -12,6 +12,7 @@ fn create_test_client_option() -> ClientOptions {
         String::from("127.0.0.1"),
         5432,
     )
+    .with_monkey_chaos_already_prepare()
 }
 
 #[cfg(test)]
@@ -19,13 +20,14 @@ mod tests {
     use std::sync::Arc;
 
     use polars::prelude::{DataType, SchemaExt};
-    use postgres_to_polars::{BinaryParam, Client, PoolOptions, build_pool};
+    use postgres_to_polars::{BinaryParam, Client, PoolOptions, build_pool, init_logger};
     use tokio::task::JoinSet;
 
     use crate::create_test_client_option;
 
     #[tokio::test]
     async fn test_simple_query() {
+        init_logger();
         // Configuration du client
         let options = create_test_client_option();
 
@@ -49,6 +51,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_data_query() {
+        init_logger();
         // Configuration du client
         let options = create_test_client_option();
 
@@ -72,6 +75,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_with_params() {
+        init_logger();
         let options = create_test_client_option();
 
         let client = Client::new(options).await.expect("Failed to create client");
@@ -97,6 +101,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepared_statement_cache() {
+        init_logger();
         let options = create_test_client_option();
 
         let client = Client::new(options).await.expect("Failed to create client");
@@ -118,6 +123,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_handling() {
+        init_logger();
         let options = create_test_client_option();
 
         let client = Client::new(options).await.expect("Failed to create client");
@@ -138,6 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_error_handling_retry_loop() {
+        init_logger();
         let client_options = create_test_client_option();
 
         let pool_options = PoolOptions::new(client_options, 10, 5);
@@ -158,6 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_concurrent_error_handling_retry_loop() {
+        init_logger();
         let client_options = create_test_client_option();
 
         let pool_options = PoolOptions::new(client_options, 10, 5);
@@ -189,6 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_array_col_query() {
+        init_logger();
         // Configuration du client
         let options = create_test_client_option();
 
@@ -220,6 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_array_col_no_row_query() {
+        init_logger();
         // Configuration du client
         let options = create_test_client_option();
 

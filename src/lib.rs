@@ -8,3 +8,4 @@ pub use models::pool::PgToPlPool;
 pub use models::pool::build_pool;
 pub use models::pool_options::PoolOptions;
 pub use utils::error::{PgToPlError, PgToPlResult};
+pub use utils::logger::init_logger;
