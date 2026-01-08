@@ -39,43 +39,51 @@ pub enum PgToPlError {
         type_name: String,
         error: TryFromSliceError,
     },
+    #[error("Timeout")]
+    Timeout,
 }
 
 pub type PgToPlResult<T> = Result<T, PgToPlError>;
 
-pub fn message_name(msg: backend::Message) -> &'static str {
-    match msg {
-        backend::Message::AuthenticationCleartextPassword => "AuthenticationCleartextPassword",
-        backend::Message::AuthenticationGss => "AuthenticationGss",
-        backend::Message::AuthenticationKerberosV5 => "AuthenticationKerberosV5",
-        backend::Message::AuthenticationMd5Password(_) => "AuthenticationMd5Password",
-        backend::Message::AuthenticationOk => "AuthenticationOk",
-        backend::Message::AuthenticationScmCredential => "AuthenticationScmCredential",
-        backend::Message::AuthenticationSspi => "AuthenticationSspi",
-        backend::Message::AuthenticationGssContinue(_) => "AuthenticationGssContinue",
-        backend::Message::AuthenticationSasl(_) => "AuthenticationSasl",
-        backend::Message::AuthenticationSaslContinue(_) => "AuthenticationSaslContinue",
-        backend::Message::AuthenticationSaslFinal(_) => "AuthenticationSaslFinal",
-        backend::Message::BackendKeyData(_) => "BackendKeyData",
-        backend::Message::BindComplete => "BindComplete",
-        backend::Message::CloseComplete => "CloseComplete",
-        backend::Message::CommandComplete(_) => "CommandComplete",
-        backend::Message::CopyData(_) => "CopyData",
-        backend::Message::CopyDone => "CopyDone",
-        backend::Message::CopyInResponse(_) => "CopyInResponse",
-        backend::Message::CopyOutResponse(_) => "CopyOutResponse",
-        backend::Message::DataRow(_) => "DataRow",
-        backend::Message::EmptyQueryResponse => "EmptyQueryResponse",
-        backend::Message::ErrorResponse(_) => "ErrorResponse",
-        backend::Message::NoData => "NoData",
-        backend::Message::NoticeResponse(_) => "NoticeResponse",
-        backend::Message::NotificationResponse(_) => "NotificationResponse",
-        backend::Message::ParameterDescription(_) => "ParameterDescription",
-        backend::Message::ParameterStatus(_) => "ParameterStatus",
-        backend::Message::ParseComplete => "ParseComplete",
-        backend::Message::PortalSuspended => "PortalSuspended",
-        backend::Message::ReadyForQuery(_) => "ReadyForQuery",
-        backend::Message::RowDescription(_) => "RowDescription",
-        _ => "UnknownMessage",
+pub trait MessageX {
+    fn message_name(&self) -> &'static str;
+}
+
+impl MessageX for backend::Message {
+    fn message_name(&self) -> &'static str {
+        match self {
+            backend::Message::AuthenticationCleartextPassword => "AuthenticationCleartextPassword",
+            backend::Message::AuthenticationGss => "AuthenticationGss",
+            backend::Message::AuthenticationKerberosV5 => "AuthenticationKerberosV5",
+            backend::Message::AuthenticationMd5Password(_) => "AuthenticationMd5Password",
+            backend::Message::AuthenticationOk => "AuthenticationOk",
+            backend::Message::AuthenticationScmCredential => "AuthenticationScmCredential",
+            backend::Message::AuthenticationSspi => "AuthenticationSspi",
+            backend::Message::AuthenticationGssContinue(_) => "AuthenticationGssContinue",
+            backend::Message::AuthenticationSasl(_) => "AuthenticationSasl",
+            backend::Message::AuthenticationSaslContinue(_) => "AuthenticationSaslContinue",
+            backend::Message::AuthenticationSaslFinal(_) => "AuthenticationSaslFinal",
+            backend::Message::BackendKeyData(_) => "BackendKeyData",
+            backend::Message::BindComplete => "BindComplete",
+            backend::Message::CloseComplete => "CloseComplete",
+            backend::Message::CommandComplete(_) => "CommandComplete",
+            backend::Message::CopyData(_) => "CopyData",
+            backend::Message::CopyDone => "CopyDone",
+            backend::Message::CopyInResponse(_) => "CopyInResponse",
+            backend::Message::CopyOutResponse(_) => "CopyOutResponse",
+            backend::Message::DataRow(_) => "DataRow",
+            backend::Message::EmptyQueryResponse => "EmptyQueryResponse",
+            backend::Message::ErrorResponse(_) => "ErrorResponse",
+            backend::Message::NoData => "NoData",
+            backend::Message::NoticeResponse(_) => "NoticeResponse",
+            backend::Message::NotificationResponse(_) => "NotificationResponse",
+            backend::Message::ParameterDescription(_) => "ParameterDescription",
+            backend::Message::ParameterStatus(_) => "ParameterStatus",
+            backend::Message::ParseComplete => "ParseComplete",
+            backend::Message::PortalSuspended => "PortalSuspended",
+            backend::Message::ReadyForQuery(_) => "ReadyForQuery",
+            backend::Message::RowDescription(_) => "RowDescription",
+            _ => "UnknownMessage",
+        }
     }
 }

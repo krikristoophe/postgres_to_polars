@@ -23,7 +23,7 @@ fn create_test_client_option() -> ClientOptions {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn load_test_simple() {
     init_logger();
-    let pool = build_pool(PoolOptions::new(create_test_client_option(), 5, 5))
+    let pool = build_pool(PoolOptions::new(create_test_client_option(), 4, 15))
         .await
         .unwrap();
 
@@ -106,7 +106,7 @@ async fn load_test_simple() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn load_test_mixed_queries() {
     init_logger();
-    let pool = build_pool(PoolOptions::new(create_test_client_option(), 5, 5))
+    let pool = build_pool(PoolOptions::new(create_test_client_option(), 4, 15))
         .await
         .unwrap();
 

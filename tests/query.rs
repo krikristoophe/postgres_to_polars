@@ -17,7 +17,7 @@ fn create_test_client_option() -> ClientOptions {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use polars::prelude::{DataType, SchemaExt};
     use postgres_to_polars::{BinaryParam, Client, PoolOptions, build_pool, init_logger};
@@ -256,6 +256,40 @@ mod tests {
             Err(e) => {
                 panic!("Query failed: {:?}", e);
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_query_cancellation_with_select() {
+        init_logger();
+        let options = create_test_client_option();
+        let client = Arc::new(Client::new(options).await.expect("Failed to create client"));
+        client.connect().await.expect("Failed to connect");
+
+        for i in 0..10 {
+            println!("loop {:?}", i);
+            let result = tokio::select! {
+                res = client.query(
+                    "SELECT i, md5(i::text) FROM generate_series(1, 1000000) i",
+                    vec![]
+                ) => {
+                    panic!("Query should have been cancelled, got: {:?}", res);
+                }
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                    "cancelled"
+                }
+            };
+
+            assert_eq!(result, "cancelled");
+
+            let result = client
+                .query(
+                    "SELECT i, md5(i::text) FROM generate_series(1, 1000000) i",
+                    vec![],
+                )
+                .await;
+
+            println!("{:?}", result);
         }
     }
 }
