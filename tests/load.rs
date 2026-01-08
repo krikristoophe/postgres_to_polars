@@ -20,10 +20,10 @@ fn create_test_client_option() -> ClientOptions {
     .with_monkey_chaos_already_prepare()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn load_test_simple() {
     init_logger();
-    let pool = build_pool(PoolOptions::new(create_test_client_option(), 10, 5))
+    let pool = build_pool(PoolOptions::new(create_test_client_option(), 5, 5))
         .await
         .unwrap();
 
@@ -103,10 +103,10 @@ async fn load_test_simple() {
     assert_eq!(errors, 0, "Il y a eu des erreurs !");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn load_test_mixed_queries() {
     init_logger();
-    let pool = build_pool(PoolOptions::new(create_test_client_option(), 10, 5))
+    let pool = build_pool(PoolOptions::new(create_test_client_option(), 5, 5))
         .await
         .unwrap();
 

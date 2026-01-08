@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::client_options::ClientOptions;
@@ -20,7 +21,7 @@ use postgres_protocol::message::frontend;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, MutexGuard};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 type StreamType<'a> = MutexGuard<'a, TcpStream>;
 
@@ -151,7 +152,7 @@ impl Client {
                     }
                     //
                     other => {
-                        warn!("Unhandled message: {:?}", message_name(other));
+                        warn!("[Connect] Unhandled message: {:?}", message_name(other));
                     }
                 }
             }
@@ -167,13 +168,17 @@ impl Client {
 
     pub async fn query<P>(&self, query: &str, params: P) -> PgToPlResult<DataFrame>
     where
-        P: IntoIterator<Item = Option<BinaryParam>>,
+        P: IntoIterator<Item = Option<BinaryParam>> + Clone + Debug,
     {
         let mut stream = self.stream.lock().await;
-        let res = self._query(query, params, &mut stream).await;
+        let res = self._query(query, params.clone(), &mut stream).await;
 
-        if res.is_err() {
+        if let Err(error) = &res {
             self.mark_unhealthy();
+            error!(
+                "Failed to execute query '{}' with params: {:?}: {}",
+                query, params, error
+            );
         }
 
         res
@@ -186,7 +191,7 @@ impl Client {
         stream: &mut StreamType<'_>,
     ) -> PgToPlResult<DataFrame>
     where
-        P: IntoIterator<Item = Option<BinaryParam>>,
+        P: IntoIterator<Item = Option<BinaryParam>> + Clone,
     {
         if self.has_broken() {
             self.mark_unhealthy();
@@ -201,7 +206,7 @@ impl Client {
 
         let portal_name = format!("portal_{}", portal_count);
 
-        let (param_types, param_values) = format_params(params);
+        let (param_types, param_values) = format_params(params.clone());
 
         let name = statement_name(query);
         let mut prepared_statements = self.prepared_statements.lock().await;
@@ -356,7 +361,7 @@ impl Client {
                         }
                         //
                         other => {
-                            warn!("Unhandled message: {:?}", message_name(other));
+                            warn!("[Read] Unhandled message: {:?}", message_name(other));
                         }
                     }
                 }
@@ -443,7 +448,7 @@ impl Client {
                     }
 
                     other => {
-                        warn!("Unhandled message: {:?}", message_name(other));
+                        warn!("[Ping] Unhandled message: {:?}", message_name(other));
                     }
                 }
             }
@@ -537,10 +542,17 @@ impl Client {
                         let mut index = 0;
                         for parameter in parameters {
                             if let Ok(parameter) = parameter {
-                                if parameter != param_types[index] {
+                                if let Some(param_type) = param_types.get(index) {
+                                    if parameter != *param_type {
+                                        warn!(
+                                            "Parameter type mismatch for stmt '{}': Provided {}, expected {}",
+                                            name, parameter, param_types[index]
+                                        );
+                                    }
+                                } else {
                                     warn!(
-                                        "Parameter type mismatch for stmt '{}': Provided {}, expected {}",
-                                        name, parameter, param_types[index]
+                                        "Unexpected parameter type for stmt '{}'. Bad number of parameters will occur. Expected parameter {} at index {}",
+                                        name, parameter, index
                                     );
                                 }
                             } else {
@@ -565,7 +577,7 @@ impl Client {
 
                     //
                     other => {
-                        warn!("Unhandled message: {:?}", message_name(other));
+                        warn!("[Prepare] Unhandled message: {:?}", message_name(other));
                     }
                 }
             }
@@ -617,7 +629,7 @@ impl Client {
                         return Err(error.into());
                     }
                     other => {
-                        warn!("Unhandled message: {:?}", message_name(other));
+                        warn!("[CloseStmt] Unhandled message: {:?}", message_name(other));
                     }
                 }
             }

@@ -1,4 +1,7 @@
+use std::fmt::Debug;
+
 use postgres_protocol::Oid;
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub enum BinaryParam {
@@ -40,6 +43,7 @@ where
                 param_values.push(Some(val.to_be_bytes().to_vec()));
             }
             None => {
+                warn!("Unknown parameter");
                 param_types.push(0); // unknown
                 param_values.push(None);
             }
