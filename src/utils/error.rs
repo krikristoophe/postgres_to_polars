@@ -41,6 +41,14 @@ pub enum PgToPlError {
     },
     #[error("Timeout")]
     Timeout,
+    #[error(
+        "Unsupported SASL mechanism: server offered {offered:?}, client supports SCRAM-SHA-256"
+    )]
+    UnsupportedSaslMechanism { offered: Vec<String> },
+    #[error("SASL protocol error: received {message} without prior initialization")]
+    SaslStateError { message: &'static str },
+    #[error("SASL authentication failed: {0}")]
+    SaslAuthenticationFailed(#[source] std::io::Error),
 }
 
 pub type PgToPlResult<T> = Result<T, PgToPlError>;

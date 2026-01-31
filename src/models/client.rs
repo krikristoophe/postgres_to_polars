@@ -16,8 +16,10 @@ use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use polars::prelude::*;
 use postgres_protocol::IsNull;
+use postgres_protocol::authentication::sasl::{ChannelBinding, SCRAM_SHA_256, ScramSha256};
 use postgres_protocol::message::backend;
 use postgres_protocol::message::frontend;
+use postgres_protocol::message::frontend::{sasl_initial_response, sasl_response};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -83,6 +85,8 @@ impl Client {
 
         let mut done = false;
 
+        let mut scram_state: Option<ScramSha256> = None;
+
         while !done {
             read_buffer.reserve(8192);
             let n = {
@@ -123,6 +127,57 @@ impl Client {
                     }
                     Ok(Some(backend::Message::AuthenticationCleartextPassword)) => {
                         warn!("Authentication: Cleartext password requested");
+                    }
+                    Ok(Some(backend::Message::AuthenticationSasl(body))) => {
+                        let mechanisms: Vec<&str> = body.mechanisms().collect()?;
+
+                        if !mechanisms.contains(&SCRAM_SHA_256) {
+                            self.mark_unhealthy();
+                            error_to_return = Some(PgToPlError::UnsupportedSaslMechanism {
+                                offered: mechanisms.iter().map(|s| s.to_string()).collect(),
+                            });
+                            continue;
+                        }
+
+                        let scram = ScramSha256::new(
+                            self.options.password.as_bytes(),
+                            ChannelBinding::unrequested(),
+                        );
+
+                        let mut buf = BytesMut::new();
+                        sasl_initial_response(SCRAM_SHA_256, scram.message(), &mut buf)?;
+                        stream.write_all(&buf).await?;
+
+                        scram_state = Some(scram);
+                    }
+                    Ok(Some(backend::Message::AuthenticationSaslContinue(body))) => {
+                        if let Some(ref mut scram) = scram_state {
+                            scram
+                                .update(body.data())
+                                .map_err(PgToPlError::SaslAuthenticationFailed)?;
+
+                            let mut buf = BytesMut::new();
+                            sasl_response(scram.message(), &mut buf)?;
+                            stream.write_all(&buf).await?;
+                        } else {
+                            self.mark_unhealthy();
+                            error_to_return = Some(PgToPlError::SaslStateError {
+                                message: "AuthenticationSaslContinue",
+                            });
+                        }
+                    }
+                    Ok(Some(backend::Message::AuthenticationSaslFinal(body))) => {
+                        if let Some(ref mut scram) = scram_state {
+                            scram
+                                .finish(body.data())
+                                .map_err(PgToPlError::SaslAuthenticationFailed)?;
+                            debug!("SASL SCRAM-SHA-256 authentication successful");
+                        } else {
+                            self.mark_unhealthy();
+                            error_to_return = Some(PgToPlError::SaslStateError {
+                                message: "AuthenticationSaslFinal",
+                            });
+                        }
                     }
                     Ok(Some(backend::Message::AuthenticationMd5Password(salt))) => {
                         let mut buf = BytesMut::new(); // <-- au lieu de Vec<u8>

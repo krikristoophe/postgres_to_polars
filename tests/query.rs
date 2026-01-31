@@ -266,8 +266,7 @@ mod tests {
         let client = Arc::new(Client::new(options).await.expect("Failed to create client"));
         client.connect().await.expect("Failed to connect");
 
-        for i in 0..10 {
-            println!("loop {:?}", i);
+        for _ in 0..10 {
             let result = tokio::select! {
                 res = client.query(
                     "SELECT i, md5(i::text) FROM generate_series(1, 1000000) i",
@@ -282,14 +281,12 @@ mod tests {
 
             assert_eq!(result, "cancelled");
 
-            let result = client
+            let _result = client
                 .query(
                     "SELECT i, md5(i::text) FROM generate_series(1, 1000000) i",
                     vec![],
                 )
                 .await;
-
-            println!("{:?}", result);
         }
     }
 }
