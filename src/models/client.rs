@@ -373,6 +373,8 @@ impl Client {
         }
         let mut error_to_return: Option<PgToPlError> = None;
 
+        let mut nb_rows = 0;
+
         // Step 4 : read response
         {
             let mut read_buffer = BytesMut::with_capacity(8192);
@@ -440,6 +442,8 @@ impl Client {
                                 self.mark_unhealthy();
                                 error_to_return = Some(PgToPlError::TooManyField(columns.len()));
                             }
+
+                            nb_rows += 1;
                         }
                         Ok(Some(backend::Message::ReadyForQuery(_))) => {
                             done = true;
@@ -494,7 +498,7 @@ impl Client {
                 .map(|col| column_to_series(col))
                 .collect::<PgToPlResult<Vec<_>>>()?;
 
-            Ok(DataFrame::from_iter(series))
+            Ok(DataFrame::new(nb_rows, series)?)
         }
     }
 

@@ -1,5 +1,5 @@
 use polars::{
-    prelude::{DataType, ListChunked, NamedFrom, TimeUnit},
+    prelude::{Column, DataType, IntoColumn, ListChunked, NamedFrom, TimeUnit},
     series::{IntoSeries, Series},
 };
 use postgres_protocol::message::backend::Field;
@@ -199,7 +199,7 @@ pub fn push_column_value(column: &mut ColumnStorage, value: Option<&[u8]>) -> Pg
     Ok(())
 }
 
-pub fn column_to_series(column: ColumnStorage) -> PgToPlResult<Series> {
+pub fn column_to_series(column: ColumnStorage) -> PgToPlResult<Column> {
     let res = match column {
         ColumnStorage::Ints(col) => Series::new(col.name.into(), &col.data),
         ColumnStorage::Texts(col) => Series::new(col.name.into(), &col.data),
@@ -219,7 +219,7 @@ pub fn column_to_series(column: ColumnStorage) -> PgToPlResult<Series> {
         }
     };
 
-    Ok(res)
+    Ok(res.into_column())
 }
 
 pub fn text_array_to_series(name: &str, data: Vec<Option<Vec<Option<String>>>>) -> Series {
