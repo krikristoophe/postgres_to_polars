@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt::Debug};
 use postgres_protocol::Oid;
 use tracing::warn;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryParam {
     Int4(i32),
     Text(String),
@@ -11,6 +11,19 @@ pub enum BinaryParam {
     Int8(i64),
     Float8(f64),
     // ajoute d'autres types ici si besoin
+}
+
+impl std::hash::Hash for BinaryParam {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            BinaryParam::Int4(v) => v.hash(state),
+            BinaryParam::Text(v) => v.hash(state),
+            BinaryParam::Bool(v) => v.hash(state),
+            BinaryParam::Int8(v) => v.hash(state),
+            BinaryParam::Float8(v) => v.to_bits().hash(state),
+        }
+    }
 }
 
 pub fn format_params<P>(params: P) -> (Vec<Oid>, Vec<Option<Vec<u8>>>)
