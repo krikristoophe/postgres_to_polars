@@ -1,8 +1,5 @@
 use std::{borrow::Cow, fmt::Debug};
 
-use postgres_protocol::Oid;
-use tracing::warn;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryParam {
     Int4(i32),
@@ -26,11 +23,12 @@ impl std::hash::Hash for BinaryParam {
     }
 }
 
-pub fn format_params<P>(params: P) -> (Vec<Oid>, Vec<Option<Vec<u8>>>)
+#[cfg(feature = "execution")]
+pub fn format_params<P>(params: P) -> (Vec<postgres_protocol::Oid>, Vec<Option<Vec<u8>>>)
 where
     P: IntoIterator<Item = Option<BinaryParam>>,
 {
-    let mut param_types: Vec<Oid> = Vec::new();
+    let mut param_types: Vec<postgres_protocol::Oid> = Vec::new();
     let mut param_values = Vec::new();
 
     for param in params {
@@ -56,7 +54,7 @@ where
                 param_values.push(Some(val.to_be_bytes().to_vec()));
             }
             None => {
-                warn!("Unknown parameter");
+                tracing::warn!("Unknown parameter");
                 param_types.push(0); // unknown
                 param_values.push(None);
             }

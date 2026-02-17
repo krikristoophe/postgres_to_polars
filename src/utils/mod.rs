@@ -1,7 +1,10 @@
 pub mod error;
 pub mod logger;
+
+#[cfg(feature = "execution")]
 pub mod text_array;
 
+#[cfg(feature = "execution")]
 pub fn md5_hash(user: &str, password: &str, salt: &[u8; 4]) -> String {
     // Étape 1 : md5(password + username)
     let inner = md5::compute(format!("{}{}", password, user));

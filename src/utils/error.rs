@@ -1,6 +1,6 @@
-use std::array::TryFromSliceError;
-
+#[cfg(feature = "execution")]
 use postgres_protocol::message::backend;
+use std::array::TryFromSliceError;
 use thiserror::Error;
 
 use crate::models::postgres_error::PostgresError;
@@ -31,6 +31,7 @@ pub enum PgToPlError {
     QueryError(PostgresError),
     #[error("Connection broken")]
     ConnectionBroken,
+    #[cfg(feature = "execution")]
     #[error("Polars error: {0}")]
     PolarsError(#[from] polars::error::PolarsError),
     #[error("Column type error: {type_name}<{bytes:?}> {error}")]
@@ -53,10 +54,12 @@ pub enum PgToPlError {
 
 pub type PgToPlResult<T> = Result<T, PgToPlError>;
 
+#[cfg(feature = "execution")]
 pub trait MessageX {
     fn message_name(&self) -> &'static str;
 }
 
+#[cfg(feature = "execution")]
 impl MessageX for backend::Message {
     fn message_name(&self) -> &'static str {
         match self {
