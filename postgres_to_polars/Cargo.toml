@@ -1,0 +1,29 @@
+[package]
+name = "postgres_to_polars"
+version = "1.0.0"
+edition = "2024"
+authors = ["Christophe Sonneville <christophe@swappy.fr>"]
+description = "Stream PostgreSQL query results directly into Polars DataFrames via sqlx."
+readme = "../README.md"
+license = "Apache-2.0"
+repository = "https://github.com/krikristoophe/postgres_to_polars"
+keywords = ["polars", "postgresql", "sqlx", "dataframe"]
+categories = ["database", "science"]
+
+[dependencies]
+polars = { version = "0.53.0", default-features = false, features = ["dtype-date", "dtype-datetime", "dtype-time"] }
+postgres_to_polars_derive = { path = "../postgres_to_polars_derive", version = "1.0.0" }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono"] }
+futures = "0.3"
+thiserror = "2"
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
+dotenvy = "0.15"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate", "chrono"] }
+
+[[bench]]
+name = "query_bench"
+harness = false

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`postgres_to_polars` is a Rust library for direct and performant conversion of PostgreSQL data to Polars DataFrames. It implements a custom PostgreSQL binary protocol client using raw TCP connections and `postgres-protocol` for message parsing, avoiding the overhead of traditional PostgreSQL drivers.
+`postgres_to_polars` is a Rust library that streams PostgreSQL query results directly into Polars DataFrames via sqlx. It provides a `#[derive(IntoDataFrame)]` proc macro and a `.to_dataframe()` extension trait on sqlx streams.
 
 ## Common Commands
 
@@ -16,22 +16,18 @@ cargo build --release
 
 ### Testing
 ```bash
-# Run all tests
-cargo test
+# Requires DATABASE_URL in .env pointing to a PostgreSQL database with the test schema
+# Tests use #[sqlx::test] which creates temporary databases per test
 
-# Run specific test file
-cargo test --test query
-cargo test --test load
-
-# Run specific test by name
-cargo test test_simple_query
-cargo test test_pool_concurrent_error_handling_retry_loop
+cargo test                          # Run all tests
+cargo test --test query             # Run query tests only
+cargo test test_simple_query        # Run specific test
 ```
 
-### Running the Binary
+### Benchmarks
 ```bash
-# The bin/test.rs contains a benchmark/test binary
-cargo run --bin postgres_to_polars
+# Creates its own temporary database (_bench_postgres_to_polars)
+cargo bench
 ```
 
 ### Linting & Formatting
@@ -42,125 +38,70 @@ cargo clippy
 
 ## Architecture
 
-### Core Protocol Implementation
+### Workspace structure
 
-The library implements PostgreSQL's binary protocol directly over TCP:
-
-1. **Client** (`src/models/client.rs`): Core client managing TCP connection, prepared statement cache, and protocol state machine
-   - Handles authentication (MD5, cleartext)
-   - Implements 3-step query flow: Parse → Bind → Execute
-   - Maintains prepared statement cache (keyed by MD5 hash of query text)
-   - Tracks connection health via `AtomicBool` flag
-   - Uses `BytesMut` for efficient buffer management
-   - Portal-based query execution with unique portal names
-
-2. **Connection Pool** (`src/models/pool.rs`): bb8-based connection pooling with health checks
-   - `ClientManager` implements bb8's `ManageConnection` trait
-   - Health validation via `ping()` and `has_broken()` checks
-   - Configurable timeouts and connection limits
-
-3. **Binary Data Conversion** (`src/models/column_result.rs`): PostgreSQL binary format → Polars types
-   - `ColumnStorage` enum represents different PostgreSQL column types
-   - Supports: int4, int8, text, varchar, bool, date, timestamptz, timestamp, time, float8, text[]
-   - Handles epoch conversions (PostgreSQL 2000-01-01 → Unix 1970-01-01)
-   - Pre-allocated column buffers grow in 1024-element chunks
-
-### Key Design Patterns
-
-**Prepared Statement Caching**: Statements are hashed (MD5) and cached in `Client.prepared_statements`. The cache stores parameter types and column metadata, allowing reuse across executions with the same query text.
-
-**Error Recovery**: When a query fails, the client is marked "unhealthy" (`mark_unhealthy()`). The pool's health check mechanism will detect this and either replace the connection or let it recover via `ping()`. The client can recover from errors without disconnection.
-
-**Message Loop Pattern**: All protocol interactions follow a read loop pattern:
-```rust
-loop {
-    read into buffer
-    while let Some(message) = backend::Message::parse(&mut buffer) {
-        match message {
-            ReadyForQuery => break loop,
-            ErrorResponse => store error,
-            // ... handle other messages
-        }
-    }
-}
+```
+postgres_to_polars/                     (workspace root)
+├── Cargo.toml                          (workspace config)
+├── postgres_to_polars/                 (library crate)
+│   ├── src/lib.rs                      (traits, VecToColumn impls, StreamToDataFrame)
+│   ├── tests/query.rs                  (integration tests with #[sqlx::test])
+│   ├── benches/query_bench.rs          (criterion benchmarks)
+│   └── migrations/                     (sqlx migrations for test DB)
+└── postgres_to_polars_derive/          (proc-macro crate)
+    └── src/lib.rs                      (derive IntoDataFrame)
 ```
 
-**Buffer Reuse**: `read_buffer` is a `BytesMut` that persists across message reads within a single query, avoiding allocations. It's only cleared between independent operations.
+### Core components
 
-### Type Mapping
+1. **`IntoDataFrame` derive macro** (`postgres_to_polars_derive/src/lib.rs`):
+   Generates for each struct:
+   - A builder struct with `Vec<T>` per field (columnar storage)
+   - `dataframe_builder(capacity)` constructor with pre-allocated Vecs
+   - `push(row)` to decompose a row into columns
+   - `build()` to convert Vecs into Polars Series/DataFrame via `VecToColumn`
+   - Trait impls for `HasDataFrameBuilder` and `DataFrameBuilder`
 
-| PostgreSQL Type | OID  | Polars Type | Notes |
-|-----------------|------|-------------|-------|
-| int4 | 23 | Int32 | Direct binary conversion |
-| int8 | 20 | Int64 | Direct binary conversion |
-| text/varchar/name | 25/1043/19 | String | UTF-8 decode with lossy conversion |
-| bool | 16 | Boolean | Single byte: 0/1 |
-| date | 1082 | Date | Days since 2000-01-01 → Unix epoch |
-| timestamptz | 1184 | Datetime(Microseconds) | Microseconds since 2000-01-01 → Unix epoch |
-| timestamp | 1114 | Datetime(Microseconds) | Same conversion as timestamptz |
-| time | 1083 | Time | Microseconds since midnight |
-| float8 | 701 | Float64 | Direct binary conversion |
-| text[] | 1009 | List(String) | Custom parser in `text_array.rs` |
+2. **`StreamToDataFrame` trait** (`postgres_to_polars/src/lib.rs`):
+   Extension trait on any `Stream<Item = Result<T, sqlx::Error>>`:
+   - `.to_dataframe(capacity)` — streams rows into builder, returns DataFrame
+   - `.to_dataframe_default()` — same with default capacity (1024)
 
-Unknown types fall back to `Bytes` storage with a warning printed.
+3. **`VecToColumn` trait** (`postgres_to_polars/src/lib.rs`):
+   Converts `Vec<T>` to Polars `Column`. Implemented for:
+   - Scalar types: i32, i64, f32, f64, bool, String (+ Option variants)
+   - Chrono types: NaiveDate, NaiveDateTime, NaiveTime (+ Option variants)
+   - List types: Vec<String>, Option<Vec<String>> (via ListStringChunkedBuilder)
 
-### Module Structure
+### Key design decisions
 
-- `models/client.rs`: TCP connection, protocol state machine, query execution
-- `models/pool.rs`: bb8 connection pool integration
-- `models/column_result.rs`: Binary data parsing and Polars conversion
-- `models/params.rs`: Parameter encoding (Rust types → PostgreSQL binary)
-- `models/client_options.rs`: Connection configuration
-- `models/pool_options.rs`: Pool configuration
-- `utils/error.rs`: Error types and Result alias
-- `utils/text_array.rs`: PostgreSQL array format parser
-- `utils/mod.rs`: MD5 helpers, statement naming, error formatting
+- **Streaming**: Rows are consumed one-by-one from the sqlx stream and pushed into columnar Vecs. No intermediate `Vec<Struct>` — memory usage is proportional to data, not 2x.
+- **Capacity hint**: `to_dataframe(n)` pre-allocates Vecs to avoid reallocations. For 500K rows this saves ~9% on string-heavy queries.
+- **VecToColumn dispatch**: The derive macro generates `VecToColumn::to_column(name, vec)` calls. This avoids type detection in the proc macro — the trait dispatch handles type-specific conversion at compile time.
 
-## Test Setup
+## Test setup
 
-Tests require a running PostgreSQL instance with:
-- Username: `POSTGRES_USER`
-- Password: `pgpassword`
-- Database: `pg-database`
-- Host: `127.0.0.1:5432`
-- Tables: `users`, `time_entries` (with `tags text[]` column)
+Tests require a running PostgreSQL instance. Connection configured via `DATABASE_URL` in `.env`.
 
-The `tests/` directory contains:
-- `query.rs`: Unit tests for query execution, prepared statement caching, error handling
-- `load.rs`: Load tests with concurrent queries (100+ concurrent connections)
+The test database needs the schema from `postgres_to_polars/migrations/`:
+- `users` table with: id, first_name, last_name, email, tags (text[]), birth_date, created_at, login_time
+- 500K rows of generated data
 
-## Important Implementation Details
+`#[sqlx::test]` creates temporary databases per test and applies migrations automatically.
 
-### Portal Management
-Each query execution creates a unique portal using an atomic counter. Portals are not explicitly closed; they're implicitly cleaned up at transaction boundaries (after `ReadyForQuery`).
+Benchmarks create their own `_bench_postgres_to_polars` database and clean it up after.
 
-### Error Handling Flow
-- Errors set `error_to_return` variable but don't immediately break loops
-- Loop continues until `ReadyForQuery` to fully drain server messages
-- Only then is the error returned
-- Client health flag is updated based on error type
+## Supported PostgreSQL → Polars type mapping
 
-### Unsafe Buffer Operations
-The code uses unsafe buffer manipulation for performance:
-```rust
-let dst = read_buffer.chunk_mut();
-let buf: &mut [u8] = unsafe {
-    std::slice::from_raw_parts_mut(dst.as_mut_ptr(), dst.len())
-};
-```
-This is safe because we call `advance_mut(n)` immediately after reading `n` bytes.
-
-### Parameter Type Consistency
-If you reuse a prepared statement with different parameter types, you'll get a `ParamTypeMismatch` error. Parameter types are part of the cache key validation.
-
-## Common Pitfalls
-
-1. **Text Arrays**: The text array parser expects PostgreSQL's text format (e.g., `{foo,bar,"baz,qux"}`). Make sure columns are actually `text[]` type, not JSON arrays.
-
-2. **Timestamp Epochs**: PostgreSQL uses 2000-01-01 as epoch for timestamps; Polars/Unix use 1970-01-01. The conversions add/subtract 946684800 seconds (or 946684800000000 microseconds).
-
-3. **Connection Health**: After an error, test if `client.has_broken()` before reusing. The pool will handle this automatically, but manual client usage needs explicit checks.
-
-4. **Buffer Clearing**: Don't clear `read_buffer` between Parse and Execute phases of the same query—leftover bytes from one message phase may be needed for the next.
-
-5. **Column Count Mismatches**: If the query returns more or fewer columns than expected, you'll get a "Too many/few fields" error. This shouldn't happen in normal usage but indicates a protocol desync.
+| Rust type | PostgreSQL | Polars |
+|-----------|-----------|--------|
+| i32 | int4 | Int32 |
+| i64 | int8 | Int64 |
+| f32 | float4 | Float32 |
+| f64 | float8 | Float64 |
+| bool | bool | Boolean |
+| String | text/varchar | String |
+| NaiveDate | date | Date |
+| NaiveDateTime | timestamp | Datetime |
+| NaiveTime | time | Time |
+| Vec\<String\> | text[] | List(String) |
