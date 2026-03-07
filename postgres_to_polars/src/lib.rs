@@ -72,6 +72,23 @@ impl_vec_to_column!(Option<chrono::NaiveDate>);
 impl_vec_to_column!(Option<chrono::NaiveDateTime>);
 impl_vec_to_column!(Option<chrono::NaiveTime>);
 
+impl VecToColumn for Vec<chrono::DateTime<chrono::Utc>> {
+    fn to_column(name: &str, data: Self) -> Column {
+        let naive: Vec<chrono::NaiveDateTime> = data.into_iter().map(|dt| dt.naive_utc()).collect();
+        Series::new(PlSmallStr::from(name), &naive).into()
+    }
+}
+
+impl VecToColumn for Vec<Option<chrono::DateTime<chrono::Utc>>> {
+    fn to_column(name: &str, data: Self) -> Column {
+        let naive: Vec<Option<chrono::NaiveDateTime>> = data
+            .into_iter()
+            .map(|opt| opt.map(|dt| dt.naive_utc()))
+            .collect();
+        Series::new(PlSmallStr::from(name), &naive).into()
+    }
+}
+
 impl VecToColumn for Vec<Option<Vec<String>>> {
     fn to_column(name: &str, data: Self) -> Column {
         let name = PlSmallStr::from(name);

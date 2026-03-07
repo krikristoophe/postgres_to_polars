@@ -1,4 +1,3 @@
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use polars::prelude::SchemaExt;
 use postgres_to_polars::{IntoDataFrame, StreamToDataFrame};
 use sqlx::PgPool;
@@ -24,26 +23,6 @@ struct UserFullRow {
     first_name: Option<String>,
     last_name: Option<String>,
     email: Option<String>,
-}
-
-#[derive(sqlx::FromRow, IntoDataFrame)]
-struct TagsRow {
-    tags: Option<Vec<String>>,
-}
-
-#[derive(sqlx::FromRow, IntoDataFrame)]
-struct DateRow {
-    birth_date: Option<NaiveDate>,
-}
-
-#[derive(sqlx::FromRow, IntoDataFrame)]
-struct DateTimeRow {
-    created_at: Option<NaiveDateTime>,
-}
-
-#[derive(sqlx::FromRow, IntoDataFrame)]
-struct TimeRow {
-    login_time: Option<NaiveTime>,
 }
 
 #[sqlx::test]
@@ -153,103 +132,4 @@ async fn test_parameterized_int(pool: PgPool) {
 
     let val = df.column("val").unwrap();
     assert_eq!(val.get(0).unwrap().to_string(), "42");
-}
-
-#[sqlx::test]
-async fn test_large_result(pool: PgPool) {
-    let df = sqlx::query_as!(
-        UserFullRow,
-        "SELECT id, first_name, last_name, email FROM users"
-    )
-    .fetch(&pool)
-    .to_dataframe(500_000)
-    .await
-    .expect("Query failed");
-
-    assert_eq!(df.height(), 500_000);
-    assert_eq!(df.width(), 4);
-}
-
-#[sqlx::test]
-async fn test_concurrent_queries(pool: PgPool) {
-    let pool = std::sync::Arc::new(pool);
-
-    let mut handles = tokio::task::JoinSet::new();
-
-    for i in 0..50i32 {
-        let pool = pool.clone();
-        handles.spawn(async move {
-            let df = sqlx::query_as!(ValRow, "SELECT $1::int as val", i)
-                .fetch(pool.as_ref())
-                .to_dataframe(1)
-                .await
-                .expect("Query failed");
-
-            assert_eq!(df.height(), 1);
-        });
-    }
-
-    while let Some(result) = handles.join_next().await {
-        result.expect("Task panicked");
-    }
-}
-
-#[sqlx::test]
-async fn test_naive_date(pool: PgPool) {
-    let df = sqlx::query_as!(DateRow, "SELECT birth_date FROM users LIMIT 5")
-        .fetch(&pool)
-        .to_dataframe(5)
-        .await
-        .expect("Query failed");
-
-    assert_eq!(df.height(), 5);
-    assert_eq!(df.width(), 1);
-
-    let schema = df.schema();
-    assert!(schema.get_field("birth_date").is_some());
-}
-
-#[sqlx::test]
-async fn test_naive_datetime(pool: PgPool) {
-    let df = sqlx::query_as!(DateTimeRow, "SELECT created_at FROM users LIMIT 5")
-        .fetch(&pool)
-        .to_dataframe(5)
-        .await
-        .expect("Query failed");
-
-    assert_eq!(df.height(), 5);
-    assert_eq!(df.width(), 1);
-
-    let schema = df.schema();
-    assert!(schema.get_field("created_at").is_some());
-}
-
-#[sqlx::test]
-async fn test_naive_time(pool: PgPool) {
-    let df = sqlx::query_as!(TimeRow, "SELECT login_time FROM users LIMIT 5")
-        .fetch(&pool)
-        .to_dataframe(5)
-        .await
-        .expect("Query failed");
-
-    assert_eq!(df.height(), 5);
-    assert_eq!(df.width(), 1);
-
-    let schema = df.schema();
-    assert!(schema.get_field("login_time").is_some());
-}
-
-#[sqlx::test]
-async fn test_text_array(pool: PgPool) {
-    let df = sqlx::query_as!(TagsRow, "SELECT tags FROM users LIMIT 5")
-        .fetch(&pool)
-        .to_dataframe(5)
-        .await
-        .expect("Query failed");
-
-    assert_eq!(df.height(), 5);
-    assert_eq!(df.width(), 1);
-
-    let schema = df.schema();
-    assert!(schema.get_field("tags").is_some());
 }

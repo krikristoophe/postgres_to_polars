@@ -1,6 +1,6 @@
 [package]
 name = "postgres_to_polars"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["Christophe Sonneville <christophe@swappy.fr>"]
 description = "Stream PostgreSQL query results directly into Polars DataFrames via sqlx."
@@ -12,7 +12,7 @@ categories = ["database", "science"]
 
 [dependencies]
 polars = { version = "0.53.0", default-features = false, features = ["dtype-date", "dtype-datetime", "dtype-time"] }
-postgres_to_polars_derive = { path = "../postgres_to_polars_derive", version = "1.0.0" }
+postgres_to_polars_derive = { path = "../postgres_to_polars_derive", version = "1.0.1" }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono"] }
 futures = "0.3"
 thiserror = "2"

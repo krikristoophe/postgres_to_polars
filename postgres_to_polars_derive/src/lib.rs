@@ -5,7 +5,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Expr, Fields, Lit, Meta, parse_macro_input};
 
 /// Derive macro that generates a columnar builder for converting rows into a Polars DataFrame.
 ///
@@ -19,7 +19,7 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 /// - `User::dataframe_builder(capacity)` constructor
 /// - `UserDataFrameBuilder::push(row)` and `build()` methods
 /// - Trait impls for `HasDataFrameBuilder` and `DataFrameBuilder`
-#[proc_macro_derive(IntoDataFrame)]
+#[proc_macro_derive(IntoDataFrame, attributes(column_name))]
 pub fn derive_into_dataframe(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
@@ -70,10 +70,11 @@ pub fn derive_into_dataframe(input: TokenStream) -> TokenStream {
 
     let first_field = &field_names[0];
 
-    let column_exprs = field_names.iter().map(|name| {
-        let name_str = name.to_string();
+    let column_exprs = fields.iter().map(|f| {
+        let name = f.ident.as_ref().unwrap();
+        let col_name = get_column_name(f).unwrap_or_else(|| name.to_string());
         quote! {
-            postgres_to_polars::VecToColumn::to_column(#name_str, self.#name)
+            postgres_to_polars::VecToColumn::to_column(#col_name, self.#name)
         }
     });
 
@@ -121,4 +122,19 @@ pub fn derive_into_dataframe(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+fn get_column_name(field: &syn::Field) -> Option<String> {
+    for attr in &field.attrs {
+        if attr.path().is_ident("column_name") {
+            if let Meta::NameValue(nv) = &attr.meta {
+                if let Expr::Lit(expr_lit) = &nv.value {
+                    if let Lit::Str(lit_str) = &expr_lit.lit {
+                        return Some(lit_str.value());
+                    }
+                }
+            }
+        }
+    }
+    None
 }

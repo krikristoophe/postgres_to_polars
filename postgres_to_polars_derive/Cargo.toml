@@ -1,6 +1,6 @@
 [package]
 name = "postgres_to_polars_derive"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["Christophe Sonneville <christophe@swappy.fr>"]
 description = "Derive macro for postgres_to_polars. Do not use directly."
