@@ -17,6 +17,14 @@ struct ColumnNameRow {
 }
 
 #[derive(sqlx::FromRow, IntoDataFrame)]
+struct SqlxRenameRow {
+    #[sqlx(rename = "user_id")]
+    id: i32,
+    #[sqlx(rename = "user_email")]
+    email: Option<String>,
+}
+
+#[derive(sqlx::FromRow, IntoDataFrame)]
 struct DateRow {
     birth_date: Option<NaiveDate>,
 }
@@ -110,6 +118,39 @@ async fn test_column_name_attribute(pool: PgPool) {
     assert!(
         schema.get_field("user_email").is_some(),
         "Column should be renamed to 'user_email'"
+    );
+    assert!(
+        schema.get_field("id").is_none(),
+        "Original field name 'id' should not appear"
+    );
+    assert!(
+        schema.get_field("email").is_none(),
+        "Original field name 'email' should not appear"
+    );
+}
+
+#[sqlx::test]
+async fn test_sqlx_rename_as_column_name(pool: PgPool) {
+    // query_as::<_, T> (not macro) because #[sqlx(rename)] works with FromRow derive, not query_as! macro
+    let df = sqlx::query_as::<_, SqlxRenameRow>(
+        r#"SELECT id as "user_id", email as "user_email" FROM users LIMIT 5"#,
+    )
+    .fetch(&pool)
+    .to_dataframe(5)
+    .await
+    .expect("Query failed");
+
+    assert_eq!(df.height(), 5);
+    assert_eq!(df.width(), 2);
+
+    let schema = df.schema();
+    assert!(
+        schema.get_field("user_id").is_some(),
+        "Column should use sqlx rename 'user_id'"
+    );
+    assert!(
+        schema.get_field("user_email").is_some(),
+        "Column should use sqlx rename 'user_email'"
     );
     assert!(
         schema.get_field("id").is_none(),

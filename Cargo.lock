@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "postgres_to_polars"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "chrono",
  "criterion",
@@ -2303,7 +2303,7 @@ dependencies = [
 
 [[package]]
 name = "postgres_to_polars_derive"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "proc-macro2",
  "quote",
