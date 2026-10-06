@@ -13,7 +13,7 @@ Add to your `Cargo.toml`:
 postgres_to_polars = "1.0"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono"] }
 tokio = { version = "1", features = ["full"] }
-polars = "0.53"
+polars = "0.55.2"
 ```
 
 ### Basic example

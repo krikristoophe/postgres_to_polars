@@ -23,7 +23,7 @@ struct UserFullRow {
 async fn test_large_result(pool: PgPool) {
     let df = sqlx::query_as!(
         UserFullRow,
-        "SELECT id, first_name, last_name, email FROM users"
+        "SELECT id as \"id!\", NULL::text as first_name, NULL::text as last_name, NULL::text as email FROM generate_series(1, 500000) AS users(id)"
     )
     .fetch(&pool)
     .to_dataframe(500_000)
