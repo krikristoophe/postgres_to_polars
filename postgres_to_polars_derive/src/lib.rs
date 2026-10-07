@@ -127,14 +127,12 @@ pub fn derive_into_dataframe(input: TokenStream) -> TokenStream {
 fn get_column_name(field: &syn::Field) -> Option<String> {
     // Priority: #[column_name = "..."] > #[sqlx(rename = "...")] > field name
     for attr in &field.attrs {
-        if attr.path().is_ident("column_name") {
-            if let Meta::NameValue(nv) = &attr.meta {
-                if let Expr::Lit(expr_lit) = &nv.value {
-                    if let Lit::Str(lit_str) = &expr_lit.lit {
-                        return Some(lit_str.value());
-                    }
-                }
-            }
+        if attr.path().is_ident("column_name")
+            && let Meta::NameValue(nv) = &attr.meta
+            && let Expr::Lit(expr_lit) = &nv.value
+            && let Lit::Str(lit_str) = &expr_lit.lit
+        {
+            return Some(lit_str.value());
         }
     }
     get_sqlx_rename(field)
@@ -142,20 +140,18 @@ fn get_column_name(field: &syn::Field) -> Option<String> {
 
 fn get_sqlx_rename(field: &syn::Field) -> Option<String> {
     for attr in &field.attrs {
-        if attr.path().is_ident("sqlx") {
-            if let Ok(nested) = attr.parse_args_with(
+        if attr.path().is_ident("sqlx")
+            && let Ok(nested) = attr.parse_args_with(
                 syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-            ) {
-                for meta in &nested {
-                    if let Meta::NameValue(nv) = meta {
-                        if nv.path.is_ident("rename") {
-                            if let Expr::Lit(expr_lit) = &nv.value {
-                                if let Lit::Str(lit_str) = &expr_lit.lit {
-                                    return Some(lit_str.value());
-                                }
-                            }
-                        }
-                    }
+            )
+        {
+            for meta in &nested {
+                if let Meta::NameValue(nv) = meta
+                    && nv.path.is_ident("rename")
+                    && let Expr::Lit(expr_lit) = &nv.value
+                    && let Lit::Str(lit_str) = &expr_lit.lit
+                {
+                    return Some(lit_str.value());
                 }
             }
         }

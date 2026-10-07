@@ -23,7 +23,7 @@ struct UserFullRow {
 async fn test_large_result(pool: PgPool) {
     let df = sqlx::query_as!(
         UserFullRow,
-        "SELECT id, first_name, last_name, email FROM users"
+        "SELECT id as \"id!\", format('first-%s', id) as first_name, format('last-%s', id) as last_name, format('user-%s@example.test', id) as email FROM generate_series(1, 500000) AS users(id)"
     )
     .fetch(&pool)
     .to_dataframe(500_000)
@@ -32,6 +32,18 @@ async fn test_large_result(pool: PgPool) {
 
     assert_eq!(df.height(), 500_000);
     assert_eq!(df.width(), 4);
+    assert_eq!(
+        df.column("first_name").unwrap().get(0).unwrap().to_string(),
+        "\"first-1\""
+    );
+    assert_eq!(
+        df.column("email")
+            .unwrap()
+            .get(499_999)
+            .unwrap()
+            .to_string(),
+        "\"user-500000@example.test\""
+    );
 }
 
 #[sqlx::test]

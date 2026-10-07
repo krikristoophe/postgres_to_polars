@@ -27,11 +27,14 @@ struct UserFullRow {
 
 #[sqlx::test]
 async fn test_simple_query(pool: PgPool) {
-    let df = sqlx::query_as!(UserRow, "SELECT id FROM users LIMIT 10")
-        .fetch(&pool)
-        .to_dataframe(10)
-        .await
-        .expect("Query failed");
+    let df = sqlx::query_as!(
+        UserRow,
+        "SELECT id as \"id!\" FROM generate_series(1, 10) AS users(id)"
+    )
+    .fetch(&pool)
+    .to_dataframe(10)
+    .await
+    .expect("Query failed");
 
     assert!(df.height() <= 10, "Should have at most 10 rows");
     assert_eq!(df.width(), 1);
@@ -39,18 +42,21 @@ async fn test_simple_query(pool: PgPool) {
 
 #[sqlx::test]
 async fn test_count_query(pool: PgPool) {
-    let df = sqlx::query_as!(CountRow, "SELECT COUNT(*) as count FROM users")
-        .fetch(&pool)
-        .to_dataframe(1)
-        .await
-        .expect("Query failed");
+    let df = sqlx::query_as!(
+        CountRow,
+        "SELECT COUNT(*) as count FROM generate_series(1, 10) AS users(id)"
+    )
+    .fetch(&pool)
+    .to_dataframe(1)
+    .await
+    .expect("Query failed");
 
     assert_eq!(df.height(), 1, "Should have 1 row");
 }
 
 #[sqlx::test]
 async fn test_query_with_params(pool: PgPool) {
-    let df = sqlx::query_as!(UserRow, "SELECT id FROM users WHERE id = $1", 1i32)
+    let df = sqlx::query_as!(UserRow, "SELECT $1::int as \"id!\"", 1i32)
         .fetch(&pool)
         .to_dataframe(1)
         .await
@@ -61,13 +67,13 @@ async fn test_query_with_params(pool: PgPool) {
 
 #[sqlx::test]
 async fn test_prepared_statement_cache(pool: PgPool) {
-    let df1 = sqlx::query_as!(UserRow, "SELECT id FROM users WHERE id = $1", 1i32)
+    let df1 = sqlx::query_as!(UserRow, "SELECT $1::int as \"id!\"", 1i32)
         .fetch(&pool)
         .to_dataframe(1)
         .await;
     assert!(df1.is_ok(), "First query should succeed");
 
-    let df2 = sqlx::query_as!(UserRow, "SELECT id FROM users WHERE id = $1", 2i32)
+    let df2 = sqlx::query_as!(UserRow, "SELECT $1::int as \"id!\"", 2i32)
         .fetch(&pool)
         .to_dataframe(1)
         .await;
@@ -92,7 +98,7 @@ async fn test_error_handling(pool: PgPool) {
 async fn test_multiple_columns(pool: PgPool) {
     let df = sqlx::query_as!(
         UserFullRow,
-        "SELECT id, first_name, last_name, email FROM users LIMIT 5"
+        "SELECT id as \"id!\", NULL::text as first_name, NULL::text as last_name, NULL::text as email FROM generate_series(1, 5) AS users(id)"
     )
     .fetch(&pool)
     .to_dataframe(5)
@@ -111,11 +117,14 @@ async fn test_multiple_columns(pool: PgPool) {
 
 #[sqlx::test]
 async fn test_empty_result(pool: PgPool) {
-    let df = sqlx::query_as!(UserRow, "SELECT id FROM users WHERE FALSE")
-        .fetch(&pool)
-        .to_dataframe_default()
-        .await
-        .expect("Query failed");
+    let df = sqlx::query_as!(
+        UserRow,
+        "SELECT id as \"id!\" FROM generate_series(1, 1) AS users(id) WHERE FALSE"
+    )
+    .fetch(&pool)
+    .to_dataframe_default()
+    .await
+    .expect("Query failed");
 
     assert_eq!(df.height(), 0, "Should have 0 rows");
 }
